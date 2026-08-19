@@ -87,7 +87,7 @@ function openModal(html) {
 
 // ---------- Job feedback (👍/👎 + optional note) ----------
 // Shared between the Review Queue and the job detail modal. Feedback is
-// stored per-job and, if you've set an Anthropic API key, gets fed into the
+// stored per-job and, if you've set an AI provider + API key, gets fed into the
 // AI-assisted scoring pass on future discovery runs so matching improves
 // over time — see server/scoring.js's buildFeedbackContext.
 function feedbackRowHtml(j) {
@@ -107,8 +107,22 @@ function feedbackRowHtml(j) {
 // often already there before you've even opened the job.
 function materialsLineHtml(j) {
   if (!j.materials) return `<p class="hint">📄 CV &amp; cover letter not generated yet.</p>`;
+  const questions = j.materials.reviewQuestions || [];
   return `<p class="hint">📄 CV &amp; cover letter ready (${fmtDate(j.materials.generatedAt)}) — <a href="/api/jobs/${j.id}/materials/cv" target="_blank">CV</a> &nbsp;·&nbsp; <a href="/api/jobs/${j.id}/materials/cover-letter" target="_blank">Cover letter</a></p>
-    ${j.materials.tailoringSummary ? `<p class="hint">✏️ ${esc(j.materials.tailoringSummary)}</p>` : ""}`;
+    ${j.materials.tailoringSummary ? `<p class="hint">✏️ ${esc(j.materials.tailoringSummary)}</p>` : ""}
+    ${questions.length ? reviewQuestionsHtml(questions) : ""}`;
+}
+
+// "Things to consider" — short, concrete questions/flags before you apply
+// (e.g. a missing required skill, a seniority mismatch). See
+// server/docgen/reviewQuestions.js for how these are generated; never
+// fabricated, only drawn from the job's own stated requirements.
+function reviewQuestionsHtml(questions) {
+  if (!questions || !questions.length) return "";
+  return `<div class="review-questions">
+    <div class="rating-label">🤔 Worth thinking about before you apply</div>
+    <ul>${questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>
+  </div>`;
 }
 
 function attachFeedbackHandlers(root, jobsById, onChange) {
@@ -225,7 +239,7 @@ async function renderReview() {
     <div class="list-item">
       <h4>${esc(j.title)} <span class="score ${scoreClass(j.score)}">Score ${j.score}</span></h4>
       <div class="meta">${esc(j.company)} · ${esc(j.location || "—")} · via ${esc(j.source)} · discovered ${fmtDate(j.discoveredAt)}
-        &nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>
+        ${j.url ? `&nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
       </div>
       ${ratingsDetailHtml(j)}
       ${feedbackRowHtml(j)}
@@ -386,13 +400,14 @@ async function openJobDetail(id) {
   openModal(`
     <span class="close-x" id="close-modal">&times;</span>
     <h3>${esc(job.title)}</h3>
-    <div class="meta">${esc(job.company)} · ${esc(job.location || "—")} · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a></div>
+    <div class="meta">${esc(job.company)} · ${esc(job.location || "—")}${job.url ? ` · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}</div>
     <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> ${job.score != null ? `&nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}</span>` : ""}</p>
     ${ratingsDetailHtml(job)}
+    ${job.materials && job.materials.reviewQuestions && job.materials.reviewQuestions.length ? reviewQuestionsHtml(job.materials.reviewQuestions) : ""}
 
     <label>Was this a good match?</label>
     ${feedbackRowHtml(job)}
-    <p class="hint">Feeds into the AI-assisted scoring pass on future discovery runs (needs an Anthropic API key + AI preferences set in Settings).</p>
+    <p class="hint">Feeds into the AI-assisted scoring pass on future discovery runs (needs an AI provider + API key + AI preferences set in Settings).</p>
 
     <label>Update status</label>
     <div class="form-row">
@@ -471,6 +486,7 @@ async function renderSettings() {
   const timeValue = `${String(settings.cadenceHourLocal ?? 7).padStart(2, "0")}:${String(settings.cadenceMinuteLocal ?? 0).padStart(2, "0")}`;
   const aiProvider = settings.aiProvider || "none";
   const aiConfigured = Boolean(aiProvider !== "none" && settings.aiApiKey);
+  const emailInbox = settings.emailInbox || {};
   const AI_PROVIDER_INFO = {
     none: { placeholder: "", hint: "" },
     anthropic: { placeholder: "sk-ant-...", hint: "Paid — console.anthropic.com → API Keys.", model: "claude-sonnet-4-5" },
@@ -598,6 +614,33 @@ async function renderSettings() {
       <label>Max AI-scored jobs per discovery run (cost guard)</label>
       <input type="number" id="maxAiScoredPerCycle" min="0" value="${settings.maxAiScoredPerCycle ?? 15}" />
 
+      <div class="section-title">Optional: LinkedIn digest import</div>
+      <p class="hint">Since LinkedIn has no public jobs API and scraping it breaks their terms of service, this app never touches linkedin.com directly. Instead, it can read LinkedIn's own "jobs for you" alert emails from an inbox you connect below, and try to resolve each listing to the employer's own Greenhouse/Lever posting (falling back to the LinkedIn link when it can't). Needs a Gmail-style <strong>App password</strong> (Google Account &rarr; Security &rarr; App passwords) — not your real password.</p>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
+        <input type="checkbox" id="emailInboxEnabled" ${emailInbox.enabled ? "checked" : ""} style="width:auto;" />
+        Import LinkedIn digest emails from a connected inbox
+      </label>
+      <div class="form-row">
+        <div>
+          <label>Email address</label>
+          <input type="text" id="emailInboxUser" value="${esc(emailInbox.user || "")}" placeholder="you@gmail.com" />
+        </div>
+        <div>
+          <label>App password</label>
+          <input type="password" id="emailInboxAppPassword" value="${emailInbox.appPassword ? "••••••••" : ""}" placeholder="16-character app password" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>IMAP host</label>
+          <input type="text" id="emailInboxHost" value="${esc(emailInbox.host || "imap.gmail.com")}" />
+        </div>
+        <div>
+          <label>Sender to watch for</label>
+          <input type="text" id="emailInboxSender" value="${esc(emailInbox.senderFilter || "jobs-noreply@linkedin.com")}" />
+        </div>
+      </div>
+
       <div class="section-title">Candidate profile (CV data)</div>
       <p class="hint">Edited as JSON for now, see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
       <textarea id="profile-json" style="min-height:260px; font-family: monospace; font-size:12px;">${esc(JSON.stringify(profile, null, 2))}</textarea>
@@ -644,6 +687,16 @@ async function renderSettings() {
       aiApiKey: document.getElementById("aiApiKey").value,
       aiModel: document.getElementById("aiModel").value,
       maxAiScoredPerCycle: Number(document.getElementById("maxAiScoredPerCycle").value),
+      emailInbox: {
+        enabled: document.getElementById("emailInboxEnabled").checked,
+        user: document.getElementById("emailInboxUser").value.trim(),
+        appPassword: document.getElementById("emailInboxAppPassword").value,
+        host: document.getElementById("emailInboxHost").value.trim() || "imap.gmail.com",
+        port: 993,
+        secure: true,
+        folder: "INBOX",
+        senderFilter: document.getElementById("emailInboxSender").value.trim() || "jobs-noreply@linkedin.com",
+      },
     };
   }
 
@@ -815,7 +868,7 @@ function openCriteriaEditor(c) {
     <input type="text" id="c-followed" value="${esc(csv(c.followedCompanies))}" />
 
     <div class="section-title">AI preferences</div>
-    <p class="hint">Describe what you're looking for in your own words — culture, pace, red flags, anything the structured fields above can't capture. If you've added an Anthropic API key in the section above, this gets sent to Claude alongside each promising match for a smarter fit judgement, blended with the rule-based score.</p>
+    <p class="hint">Describe what you're looking for in your own words — culture, pace, red flags, anything the structured fields above can't capture. If you've set an AI provider + API key in Advanced settings, this gets sent alongside each promising match for a smarter fit judgement, blended with the rule-based score.</p>
     <textarea id="c-ai-prefs" style="min-height:90px;" placeholder="e.g. I want a fast-moving, engineering-led team, ideally Series B+. Avoid heavily bureaucratic or matrixed organisations. Bonus if the role involves AI-native products.">${esc(c.aiPreferences || "")}</textarea>
 
     <div class="section-title">Sources</div>
