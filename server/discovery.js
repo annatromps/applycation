@@ -5,6 +5,7 @@ const { scoreJob, scoreJobWithAI, buildFeedbackContext } = require("./scoring");
 const { buildMaterialsForJob } = require("./docgen/materials");
 const { sendNotification } = require("./notify");
 const { isAIConfigured } = require("./ai/client");
+const { discoverFromLinkedInDigests } = require("./email/linkedinDigest");
 
 const AI_PRESCREEN_THRESHOLD = 35; // don't bother spending an AI call on jobs the rules already hate
 
@@ -26,6 +27,19 @@ async function runDiscoveryCycle() {
   // time instead of just displaying the feedback back at you.
   const feedbackContext = buildFeedbackContext(data.jobs);
 
+  // LinkedIn job-alert digest import (optional, off by default — see
+  // Settings > Advanced > LinkedIn digest import). Fetched once per cycle,
+  // not per criteria profile, so each new email is only read/marked-seen
+  // once regardless of how many active profiles you have.
+  let digestJobs = [];
+  if (data.settings.emailInbox && data.settings.emailInbox.enabled) {
+    try {
+      digestJobs = await discoverFromLinkedInDigests(data.settings);
+    } catch (e) {
+      console.error("[discovery] LinkedIn digest import failed for this cycle:", e.message);
+    }
+  }
+
   // Auto-generate a tailored CV + cover letter for every surfaced match, so
   // materials are already waiting when you open it — on by default, but a
   // real cost guard: AI-assisted cover-letter drafting (if an Anthropic key
@@ -39,7 +53,7 @@ async function runDiscoveryCycle() {
   let materialsSkippedForCap = 0;
 
   for (const criteria of activeProfiles) {
-    const found = await discoverJobs(criteria);
+    const found = [...(await discoverJobs(criteria)), ...digestJobs];
     const candidates = [];
 
     for (const job of found) {
