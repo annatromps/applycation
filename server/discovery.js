@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const db = require("./db");
 const { discoverJobs } = require("./sources");
-const { scoreJob, scoreJobWithAI } = require("./scoring");
+const { scoreJob, scoreJobWithAI, buildFeedbackContext } = require("./scoring");
 const { sendNotification } = require("./notify");
 
 const AI_PRESCREEN_THRESHOLD = 35; // don't bother spending an AI call on jobs the rules already hate
@@ -19,6 +19,10 @@ async function runDiscoveryCycle() {
   const existingKeys = new Set(data.jobs.map((j) => `${j.source}:${j.sourceId}`));
   const newlyAdded = [];
   const maxAiPerCycle = data.settings.maxAiScoredPerCycle ?? 15;
+  // Built once per cycle (not per job) — your accumulated 👍/👎 feedback,
+  // fed into the AI scoring pass below so matching actually improves over
+  // time instead of just displaying the feedback back at you.
+  const feedbackContext = buildFeedbackContext(data.jobs);
 
   for (const criteria of activeProfiles) {
     const found = await discoverJobs(criteria);
@@ -47,7 +51,7 @@ async function runDiscoveryCycle() {
         .slice(0, maxAiPerCycle);
       for (const c of eligible) {
         try {
-          const ai = await scoreJobWithAI(c.job, criteria, data.settings);
+          const ai = await scoreJobWithAI(c.job, criteria, data.settings, feedbackContext);
           c.finalScore = Math.round((c.ruleScore + ai.score) / 2);
           c.reasons = [...c.reasons, ...ai.reasons];
         } catch (e) {
@@ -71,6 +75,7 @@ async function runDiscoveryCycle() {
         status: "discovered",
         statusHistory: [{ status: "discovered", at: new Date().toISOString() }],
         notes: "",
+        feedback: null, // { rating: "up" | "down", note: "", ratedAt } — see routes/jobs.js's /feedback endpoint
         materials: null,
         appliedAt: null,
         outcomeAt: null,

@@ -70,6 +70,31 @@ router.post("/:id/status", async (req, res) => {
   res.json({ ...rest, materials: materials ? { generatedAt: materials.generatedAt, cvFilename: materials.cvFilename, coverLetterFilename: materials.coverLetterFilename } : null });
 });
 
+// Thumbs up/down + optional note on a suggested job. Stored per-job and fed
+// back into the AI-assisted scoring pass on future discovery runs (see
+// scoring.js's buildFeedbackContext / discovery.js) so match quality
+// improves over time — most useful once an Anthropic API key + AI
+// preferences are set in Settings, since that's the pass that actually
+// reads it; without a key it's still stored and shown, just not yet acted on.
+router.post("/:id/feedback", async (req, res) => {
+  const { rating, note } = req.body || {};
+  if (rating !== undefined && rating !== null && !["up", "down"].includes(rating)) {
+    return res.status(400).json({ error: 'rating must be "up", "down", or null' });
+  }
+  const data = await db.read();
+  const job = data.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "not found" });
+
+  const existing = job.feedback || {};
+  const nextRating = rating !== undefined ? rating : existing.rating || null;
+  const nextNote = note !== undefined ? note : existing.note || "";
+  job.feedback = nextRating || nextNote
+    ? { rating: nextRating, note: nextNote, ratedAt: new Date().toISOString() }
+    : null;
+  await db.write(data);
+  res.json({ feedback: job.feedback });
+});
+
 router.post("/:id/generate-materials", async (req, res) => {
   const data = await db.read();
   const job = data.jobs.find((j) => j.id === req.params.id);

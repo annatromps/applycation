@@ -182,7 +182,7 @@ function scoreJob(job, criteria) {
  * capture. Requires settings.anthropicApiKey; callers should treat a thrown
  * error as "skip AI scoring for this job" rather than fatal.
  */
-async function scoreJobWithAI(job, criteria, settings) {
+async function scoreJobWithAI(job, criteria, settings, feedbackContext) {
   if (!settings.anthropicApiKey) {
     throw new Error("No Anthropic API key configured — AI-assisted scoring is unavailable.");
   }
@@ -210,6 +210,15 @@ async function scoreJobWithAI(job, criteria, settings) {
     ),
     "",
     `Candidate's free-text preferences, in their own words (weight this heavily, it's the whole point of this pass): "${criteria.aiPreferences || ""}"`,
+    ...(feedbackContext
+      ? [
+          "",
+          "The candidate has previously given 👍/👎 feedback on past suggested jobs, with optional notes explaining why. " +
+            "Use this as a real signal of their taste — infer patterns (industries, company types, role flavours, red flags) " +
+            "rather than just matching exact titles/companies, and let it adjust your score up or down accordingly:",
+          feedbackContext,
+        ]
+      : []),
   ].join("\n");
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -228,4 +237,25 @@ async function scoreJobWithAI(job, criteria, settings) {
   };
 }
 
-module.exports = { scoreJob, scoreJobWithAI };
+/**
+ * Turns stored 👍/👎 feedback on past jobs into a compact text block for the
+ * AI scoring prompt above, so future matching actually learns from it rather
+ * than just displaying it. Capped to the most recent N rated jobs so the
+ * prompt (and cost) stays bounded as feedback accumulates over time.
+ */
+function buildFeedbackContext(jobs, maxEntries = 25) {
+  const rated = (jobs || [])
+    .filter((j) => j.feedback && j.feedback.rating)
+    .sort((a, b) => new Date(b.feedback.ratedAt) - new Date(a.feedback.ratedAt))
+    .slice(0, maxEntries);
+  if (!rated.length) return "";
+  return rated
+    .map((j) => {
+      const stamp = j.feedback.rating === "up" ? "👍 liked" : "👎 disliked";
+      const note = j.feedback.note ? ` — note: "${j.feedback.note}"` : "";
+      return `- ${stamp}: "${j.title}" at ${j.company}${j.location ? ` (${j.location})` : ""}${note}`;
+    })
+    .join("\n");
+}
+
+module.exports = { scoreJob, scoreJobWithAI, buildFeedbackContext };

@@ -49,6 +49,50 @@ function openModal(html) {
   });
 }
 
+// ---------- Job feedback (👍/👎 + optional note) ----------
+// Shared between the Review Queue and the job detail modal. Feedback is
+// stored per-job and, if you've set an Anthropic API key, gets fed into the
+// AI-assisted scoring pass on future discovery runs so matching improves
+// over time — see server/scoring.js's buildFeedbackContext.
+function feedbackRowHtml(j) {
+  const fb = j.feedback || {};
+  return `
+    <div class="feedback-row" data-feedback-id="${j.id}">
+      <button class="fb-btn up ${fb.rating === "up" ? "active" : ""}" data-fb="up" title="Good match">👍</button>
+      <button class="fb-btn down ${fb.rating === "down" ? "active" : ""}" data-fb="down" title="Not for me">👎</button>
+      <a href="#" class="fb-note-link" data-fb-note>${fb.note ? "Edit note" : "+ Add note"}</a>
+      ${fb.note ? `<span class="hint">“${esc(fb.note)}”</span>` : ""}
+    </div>
+  `;
+}
+
+function attachFeedbackHandlers(root, jobsById, onChange) {
+  root.querySelectorAll(".feedback-row").forEach((row) => {
+    const id = row.dataset.feedbackId;
+    const job = jobsById[id] || {};
+    row.querySelectorAll("[data-fb]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rating = btn.classList.contains("active") ? null : btn.dataset.fb;
+        await api(`/jobs/${id}/feedback`, { method: "POST", body: JSON.stringify({ rating }) });
+        onChange();
+      });
+    });
+    const noteLink = row.querySelector("[data-fb-note]");
+    if (noteLink) {
+      noteLink.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const note = prompt(
+          "Feedback note (optional) — what made this a good or bad match? Helps the AI scoring learn your taste.",
+          (job.feedback && job.feedback.note) || ""
+        );
+        if (note === null) return; // cancelled
+        await api(`/jobs/${id}/feedback`, { method: "POST", body: JSON.stringify({ note }) });
+        onChange();
+      });
+    }
+  });
+}
+
 // ---------- Router ----------
 const routes = {
   dashboard: renderDashboard,
@@ -139,6 +183,7 @@ async function renderReview() {
         &nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>
       </div>
       <ul class="reasons">${(j.scoreReasons || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+      ${feedbackRowHtml(j)}
       <button data-approve="${j.id}">Approve &amp; prepare materials</button>
       <button class="secondary" data-detail="${j.id}">Details</button>
       <button class="secondary" data-dismiss="${j.id}">Dismiss</button>
@@ -146,6 +191,8 @@ async function renderReview() {
   `
     )
     .join("");
+
+  attachFeedbackHandlers(body, Object.fromEntries(jobs.map((j) => [j.id, j])), renderReview);
 
   body.querySelectorAll("[data-approve]").forEach((btn) =>
     btn.addEventListener("click", async () => {
@@ -228,6 +275,10 @@ async function openJobDetail(id) {
     <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> &nbsp; <span class="score ${scoreClass(job.score)}">Score ${job.score}</span></p>
     <ul class="reasons">${(job.scoreReasons || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
 
+    <label>Was this a good match?</label>
+    ${feedbackRowHtml(job)}
+    <p class="hint">Feeds into the AI-assisted scoring pass on future discovery runs (needs an Anthropic API key + AI preferences set in Settings).</p>
+
     <label>Update status</label>
     <div class="form-row">
       <select id="status-select">${statuses.map((s) => `<option value="${s}" ${s === job.status ? "selected" : ""}>${s.replace(/_/g, " ")}</option>`).join("")}</select>
@@ -250,6 +301,7 @@ async function openJobDetail(id) {
   `);
 
   document.getElementById("close-modal").addEventListener("click", closeModal);
+  attachFeedbackHandlers(modalRoot, { [job.id]: job }, () => openJobDetail(job.id));
   document.getElementById("save-status").addEventListener("click", async () => {
     await api(`/jobs/${job.id}/status`, { method: "POST", body: JSON.stringify({ status: document.getElementById("status-select").value }) });
     closeModal();

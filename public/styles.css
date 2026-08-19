@@ -109,3 +109,10 @@ label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; c
 
 .tag-input-preview { font-size: 12px; color: var(--grey); margin-top: 4px; }
 .section-title { margin-top: 32px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--grey); }
+
+.feedback-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
+.fb-btn { background: none; border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; font-size: 15px; line-height: 1.4; cursor: pointer; }
+.fb-btn:hover { background: var(--bg); }
+.fb-btn.up.active { background: var(--green-bg); border-color: var(--green); }
+.fb-btn.down.active { background: var(--red-bg); border-color: var(--red); }
+.fb-note-link { font-size: 12px; }
