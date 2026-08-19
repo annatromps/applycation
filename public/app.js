@@ -398,23 +398,87 @@ async function openJobDetail(id) {
 async function renderSettings() {
   main.innerHTML = `<h2>Settings</h2><div id="settings-body">Loading…</div>`;
   const [settings, profile, criteria, cvUpload] = await Promise.all([api("/settings"), api("/profile"), api("/criteria"), api("/profile/cv-upload")]);
+  const isScheduled = settings.cadence && settings.cadence !== "manual";
+  const frequency = isScheduled ? settings.cadence : "daily";
+  const timeValue = `${String(settings.cadenceHourLocal ?? 7).padStart(2, "0")}:${String(settings.cadenceMinuteLocal ?? 0).padStart(2, "0")}`;
+
   document.getElementById("settings-body").innerHTML = `
     <div class="card">
       <h3>Search &amp; automation</h3>
-      <div class="form-row">
-        <div>
-          <label>Cadence</label>
-          <select id="cadence">
-            ${["manual","daily","every_2_3_days","weekly","custom"].map((c) => `<option value="${c}" ${c === settings.cadence ? "selected" : ""}>${c.replace(/_/g, " ")}</option>`).join("")}
-          </select>
+      <label>Cadence</label>
+      <div class="radio-group">
+        <label class="radio-option"><input type="radio" name="cadenceMode" value="manual" ${!isScheduled ? "checked" : ""} /> Manual — I'll run it myself</label>
+        <label class="radio-option"><input type="radio" name="cadenceMode" value="scheduled" ${isScheduled ? "checked" : ""} /> At a set time</label>
+      </div>
+      <div id="cadence-scheduled-fields" style="display:${isScheduled ? "block" : "none"}; margin-top:10px;">
+        <div class="form-row">
+          <div>
+            <label>Frequency</label>
+            <select id="cadenceFrequency">
+              <option value="daily" ${frequency === "daily" ? "selected" : ""}>Daily</option>
+              <option value="every_2_3_days" ${frequency === "every_2_3_days" ? "selected" : ""}>Every 2-3 days</option>
+              <option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly (Mondays)</option>
+              <option value="custom" ${frequency === "custom" ? "selected" : ""}>Custom (cron)</option>
+            </select>
+          </div>
+          <div>
+            <label>Time</label>
+            <input type="time" id="cadenceTime" value="${timeValue}" />
+          </div>
         </div>
-        <div>
-          <label>Run hour (local, 0-23)</label>
-          <input type="number" id="cadenceHour" min="0" max="23" value="${settings.cadenceHourLocal ?? 7}" />
+        <div id="custom-cron-field" style="display:${frequency === "custom" ? "block" : "none"}; margin-top:10px;">
+          <label>Custom cron expression</label>
+          <input type="text" id="customCron" value="${esc(settings.customCron || "")}" placeholder="0 7 * * *" />
         </div>
       </div>
-      <label>Custom cron (only used if cadence = custom)</label>
-      <input type="text" id="customCron" value="${esc(settings.customCron || "")}" placeholder="0 7 * * *" />
+
+      <label style="margin-top:16px;">Default submission mode</label>
+      <select id="submissionMode">
+        <option value="manual" ${settings.submissionMode === "manual" ? "selected" : ""}>Manual (I submit myself)</option>
+        <option value="assisted" ${settings.submissionMode === "assisted" ? "selected" : ""}>Assisted auto-fill (beta, Greenhouse only)</option>
+        <option value="ask_each_time" ${settings.submissionMode === "ask_each_time" ? "selected" : ""}>Ask each time</option>
+      </select>
+
+      <div style="margin-top:16px;"><button id="save-settings">Save settings</button><span id="settings-msg" class="hint"></span></div>
+    </div>
+
+    <div class="card">
+      <h3>Baseline CV file</h3>
+      <p class="hint">Upload your CV (PDF or Word/.docx). This is what your profile gets auto-filled from, and what every tailored CV/cover letter is generated relative to.</p>
+      ${
+        cvUpload
+          ? `<p><strong>${esc(cvUpload.originalFilename)}</strong> · uploaded ${fmtDate(cvUpload.uploadedAt)}
+             &nbsp; <a href="/api/profile/cv-upload/view" target="_blank">View</a>
+             &nbsp;·&nbsp; <a href="/api/profile/cv-upload/download" target="_blank">Download</a>
+             &nbsp;·&nbsp; <a href="#" id="remove-cv">Remove</a></p>
+             ${
+               cvUpload.mimetype === "application/pdf"
+                 ? `<iframe src="/api/profile/cv-upload/view" style="width:100%; height:420px; border:1px solid var(--border); border-radius:8px;"></iframe>`
+                 : `<p class="hint">Inline preview isn't available for Word files in-browser — use View/Download above (View will prompt your system's Word viewer).</p>`
+             }
+             <div style="margin-top:12px;">
+               <button id="import-from-cv" ${settings.anthropicApiKey ? "" : "disabled"}>Auto-fill profile from this CV (AI)</button>
+               ${settings.anthropicApiKey ? "" : `<span class="hint">Add an Anthropic API key under Advanced settings to enable this.</span>`}
+             </div>`
+          : `<p class="empty">No CV uploaded yet.</p>`
+      }
+      <div style="margin-top:12px;">
+        <input type="file" id="cv-file-input" accept=".pdf,.docx" />
+        <button id="upload-cv" class="secondary">Upload</button>
+        <span id="cv-upload-msg" class="hint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>Criteria profiles</h3>
+        <button id="add-criteria">+ Add profile</button>
+      </div>
+      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || `<p class="empty">No criteria profiles yet — add one to start discovering jobs.</p>`}</div>
+    </div>
+
+    <details class="card advanced-settings" id="advanced-settings">
+      <summary>Advanced settings</summary>
 
       <label>Minimum score to surface a match (0-100)</label>
       <input type="number" id="minScore" min="0" max="100" value="${settings.minScoreToSurface}" />
@@ -431,13 +495,6 @@ async function renderSettings() {
           <input type="text" id="webhookUrl" value="${esc(settings.notifications.webhookUrl || "")}" />
         </div>
       </div>
-
-      <label>Default submission mode</label>
-      <select id="submissionMode">
-        <option value="manual" ${settings.submissionMode === "manual" ? "selected" : ""}>Manual (I submit myself)</option>
-        <option value="assisted" ${settings.submissionMode === "assisted" ? "selected" : ""}>Assisted auto-fill (beta, Greenhouse only)</option>
-        <option value="ask_each_time" ${settings.submissionMode === "ask_each_time" ? "selected" : ""}>Ask each time</option>
-      </select>
 
       <div class="section-title">Application materials</div>
       <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
@@ -458,56 +515,33 @@ async function renderSettings() {
       <label>Max AI-scored jobs per discovery run (cost guard)</label>
       <input type="number" id="maxAiScoredPerCycle" min="0" value="${settings.maxAiScoredPerCycle ?? 15}" />
 
-      <div style="margin-top:16px;"><button id="save-settings">Save settings</button><span id="settings-msg" class="hint"></span></div>
-    </div>
-
-    <div class="card">
-      <h3>Baseline CV file</h3>
-      <p class="hint">Upload your CV (PDF or Word/.docx). This is what the profile below gets auto-filled from, and what every tailored CV/cover letter is generated relative to.</p>
-      ${
-        cvUpload
-          ? `<p><strong>${esc(cvUpload.originalFilename)}</strong> · uploaded ${fmtDate(cvUpload.uploadedAt)}
-             &nbsp; <a href="/api/profile/cv-upload/view" target="_blank">View</a>
-             &nbsp;·&nbsp; <a href="/api/profile/cv-upload/download" target="_blank">Download</a>
-             &nbsp;·&nbsp; <a href="#" id="remove-cv">Remove</a></p>
-             ${
-               cvUpload.mimetype === "application/pdf"
-                 ? `<iframe src="/api/profile/cv-upload/view" style="width:100%; height:420px; border:1px solid var(--border); border-radius:8px;"></iframe>`
-                 : `<p class="hint">Inline preview isn't available for Word files in-browser — use View/Download above (View will prompt your system's Word viewer).</p>`
-             }
-             <div style="margin-top:12px;">
-               <button id="import-from-cv" ${settings.anthropicApiKey ? "" : "disabled"}>Auto-fill profile from this CV (AI)</button>
-               ${settings.anthropicApiKey ? "" : `<span class="hint">Add an Anthropic API key above to enable this.</span>`}
-             </div>`
-          : `<p class="empty">No CV uploaded yet.</p>`
-      }
-      <div style="margin-top:12px;">
-        <input type="file" id="cv-file-input" accept=".pdf,.docx" />
-        <button id="upload-cv" class="secondary">Upload</button>
-        <span id="cv-upload-msg" class="hint"></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>Candidate profile (CV data)</h3>
+      <div class="section-title">Candidate profile (CV data)</div>
       <p class="hint">Edited as JSON for now, see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
       <textarea id="profile-json" style="min-height:260px; font-family: monospace; font-size:12px;">${esc(JSON.stringify(profile, null, 2))}</textarea>
       <div style="margin-top:8px;"><button id="save-profile">Save profile</button><span id="profile-msg" class="hint"></span></div>
-    </div>
 
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3>Criteria profiles</h3>
-        <button id="add-criteria">+ Add profile</button>
-      </div>
-      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || `<p class="empty">No criteria profiles yet — add one to start discovering jobs.</p>`}</div>
-    </div>
+      <div style="margin-top:16px;"><button id="save-settings-advanced">Save settings</button><span id="settings-msg-advanced" class="hint"></span></div>
+    </details>
   `;
 
-  document.getElementById("save-settings").addEventListener("click", async () => {
-    const payload = {
-      cadence: document.getElementById("cadence").value,
-      cadenceHourLocal: Number(document.getElementById("cadenceHour").value),
+  const cadenceModeRadios = document.querySelectorAll('input[name="cadenceMode"]');
+  const scheduledFields = document.getElementById("cadence-scheduled-fields");
+  cadenceModeRadios.forEach((r) =>
+    r.addEventListener("change", () => {
+      scheduledFields.style.display = document.querySelector('input[name="cadenceMode"]:checked').value === "scheduled" ? "block" : "none";
+    })
+  );
+  document.getElementById("cadenceFrequency").addEventListener("change", (e) => {
+    document.getElementById("custom-cron-field").style.display = e.target.value === "custom" ? "block" : "none";
+  });
+
+  function collectSettingsPayload() {
+    const cadenceMode = document.querySelector('input[name="cadenceMode"]:checked').value;
+    const [h, m] = document.getElementById("cadenceTime").value.split(":").map(Number);
+    return {
+      cadence: cadenceMode === "manual" ? "manual" : document.getElementById("cadenceFrequency").value,
+      cadenceHourLocal: Number.isInteger(h) ? h : 7,
+      cadenceMinuteLocal: Number.isInteger(m) ? m : 0,
       customCron: document.getElementById("customCron").value,
       minScoreToSurface: Number(document.getElementById("minScore").value),
       notifications: { mode: document.getElementById("notifMode").value, webhookUrl: document.getElementById("webhookUrl").value },
@@ -518,9 +552,14 @@ async function renderSettings() {
       anthropicModel: document.getElementById("anthropicModel").value,
       maxAiScoredPerCycle: Number(document.getElementById("maxAiScoredPerCycle").value),
     };
-    await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
-    document.getElementById("settings-msg").textContent = "Saved.";
-  });
+  }
+
+  async function saveSettings(msgEl) {
+    await api("/settings", { method: "PUT", body: JSON.stringify(collectSettingsPayload()) });
+    msgEl.textContent = "Saved.";
+  }
+  document.getElementById("save-settings").addEventListener("click", () => saveSettings(document.getElementById("settings-msg")));
+  document.getElementById("save-settings-advanced").addEventListener("click", () => saveSettings(document.getElementById("settings-msg-advanced")));
 
   document.getElementById("save-profile").addEventListener("click", async () => {
     const msg = document.getElementById("profile-msg");
@@ -572,8 +611,9 @@ async function renderSettings() {
       const msg = document.getElementById("cv-upload-msg");
       try {
         const draft = await api("/profile/import-from-cv", { method: "POST" });
+        document.getElementById("advanced-settings").open = true;
         document.getElementById("profile-json").value = JSON.stringify(draft, null, 2);
-        msg.textContent = "Draft imported below — review it, then hit \"Save profile\" to apply it.";
+        msg.textContent = "Draft imported under Advanced settings → Candidate profile — review it, then hit \"Save profile\" to apply it.";
         document.getElementById("profile-json").scrollIntoView({ behavior: "smooth" });
       } catch (err) {
         msg.textContent = `Import failed: ${err.message}`;

@@ -58,7 +58,7 @@ DATABASE_URL="postgresql://..." node seed-anna.js
   - **Manual** (default): you always submit yourself; the app just gets your materials ready and tracks the outcome.
   - **Assisted (beta)**: for Greenhouse-hosted postings only, an "Attempt auto-fill" button opens a real browser window, fills the fields it recognizes (name, email, phone, resume/cover-letter upload), and **stops** — it never clicks Submit. You review the whole form yourself before submitting. Requires `npm install playwright && npx playwright install chromium` (deliberately not a core dependency, so people who only want manual mode don't need to download a browser).
   - **Ask each time**: no default — you decide per job.
-- **Scheduling**: cadence is configurable (manual / daily / every 2-3 days / weekly / custom cron) and drives an in-process scheduler that re-runs discovery automatically. This only fires while the app process is running — see "Running it 24/7" below.
+- **Scheduling**: pick Manual or "At a set time" in Settings; the latter reveals a frequency (daily / every 2-3 days / weekly / custom cron) and a time picker, driving an in-process scheduler that re-runs discovery automatically. This only fires while the app process is running — see "Running it 24/7" below.
 - **Notifications**: optional webhook (Slack/Discord/anything that accepts a JSON POST) fired whenever new matches are found.
 
 ## On LinkedIn / Indeed

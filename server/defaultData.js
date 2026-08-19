@@ -5,6 +5,7 @@ function defaultData() {
       cadence: "manual", // "manual" | "daily" | "every_2_3_days" | "weekly" | "custom"
       customCron: "", // used when cadence === "custom"
       cadenceHourLocal: 7, // hour of day (local server time) auto-runs fire at
+      cadenceMinuteLocal: 0, // minute of the hour auto-runs fire at
       notifications: {
         mode: "none", // "none" | "webhook" | "console"
         webhookUrl: "",

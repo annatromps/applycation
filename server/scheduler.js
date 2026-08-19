@@ -6,13 +6,14 @@ let currentTask = null;
 
 function cronExpressionFor(settings) {
   const hour = Number.isInteger(settings.cadenceHourLocal) ? settings.cadenceHourLocal : 7;
+  const minute = Number.isInteger(settings.cadenceMinuteLocal) ? settings.cadenceMinuteLocal : 0;
   switch (settings.cadence) {
     case "daily":
-      return `0 ${hour} * * *`;
+      return `${minute} ${hour} * * *`;
     case "every_2_3_days":
-      return `0 ${hour} */2 * *`;
+      return `${minute} ${hour} */2 * *`;
     case "weekly":
-      return `0 ${hour} * * 1`; // Mondays
+      return `${minute} ${hour} * * 1`; // Mondays
     case "custom":
       return settings.customCron || null;
     case "manual":

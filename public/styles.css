@@ -82,7 +82,7 @@ button.danger { background: var(--red); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .filters { margin-bottom: 16px; display: flex; gap: 10px; align-items: center; }
-select, input[type=text], input[type=number], input[type=password], textarea {
+select, input[type=text], input[type=number], input[type=password], input[type=time], textarea {
   padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; width: 100%;
 }
 textarea { min-height: 60px; font-family: inherit; }
@@ -90,6 +90,19 @@ label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; c
 .form-row { display: flex; gap: 16px; }
 .form-row > div { flex: 1; }
 .hint { font-size: 12px; color: var(--grey); margin-top: 4px; }
+
+.radio-group { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.radio-option { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 400; color: #111827; margin: 0; }
+.radio-option input[type=radio] { width: auto; margin: 0; }
+
+details.advanced-settings summary {
+  cursor: pointer; font-size: 16px; font-weight: 700; color: var(--navy);
+  list-style: none; display: flex; align-items: center; gap: 6px;
+}
+details.advanced-settings summary::-webkit-details-marker { display: none; }
+details.advanced-settings summary::before { content: "▸"; font-size: 12px; color: var(--grey); transition: transform 0.15s; }
+details.advanced-settings[open] summary::before { transform: rotate(90deg); }
+details.advanced-settings[open] summary { margin-bottom: 16px; }
 
 .reasons { font-size: 13px; color: var(--grey); margin: 8px 0; }
 .reasons li { margin-bottom: 2px; }
