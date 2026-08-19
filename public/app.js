@@ -295,7 +295,7 @@ async function renderTracker() {
         <label style="margin:0;">Status:</label>
         <select id="status-filter" style="width:220px;">
           <option value="">All</option>
-          ${["discovered","reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"]
+          ${["reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"]
             .map((s) => `<option value="${s}">${s.replace(/_/g, " ")}</option>`)
             .join("")}
         </select>
@@ -309,7 +309,11 @@ async function renderTracker() {
   `;
   const load = async () => {
     const status = document.getElementById("status-filter").value;
-    const jobs = await api(`/jobs${status ? `?status=${status}` : ""}`);
+    const allJobs = await api(`/jobs${status ? `?status=${status}` : ""}`);
+    // Newly-discovered matches live in the Review Queue until you act on
+    // them (approve/dismiss) — the Tracker only shows jobs you've actually
+    // engaged with, so "discovered" never appears here even under "All".
+    const jobs = status ? allJobs : allJobs.filter((j) => j.status !== "discovered");
     const tbody = document.getElementById("tracker-body");
     if (!jobs.length) {
       tbody.innerHTML = `<tr><td colspan="6" class="empty">No jobs in this view.</td></tr>`;
