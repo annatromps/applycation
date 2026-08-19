@@ -10,24 +10,28 @@
 // company out of the surrounding markup, so those come back blank rather
 // than guessed.
 
-const cheerio = require("cheerio");
 const { callAI, isAIConfigured } = require("./../ai/client");
 
 const LINKEDIN_JOB_LINK = /linkedin\.com\/(comm\/)?jobs\/view\//i;
 
+// Plain-regex HTML link extraction — deliberately avoids a full HTML parser
+// dependency here (one less thing that can break across Node versions);
+// this only needs to find <a href="...linkedin job link...">title text</a>
+// patterns, which digest emails produce very consistently.
 function ruleBasedExtract(html, text) {
   const entries = [];
   const seen = new Set();
   try {
-    const $ = cheerio.load(html || "");
-    $("a").each((_, el) => {
-      const href = $(el).attr("href") || "";
-      if (!LINKEDIN_JOB_LINK.test(href)) return;
-      const title = $(el).text().replace(/\s+/g, " ").trim();
-      if (!title || seen.has(href)) return;
+    const anchorRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let m;
+    while ((m = anchorRe.exec(html || ""))) {
+      const href = m[1];
+      if (!LINKEDIN_JOB_LINK.test(href)) continue;
+      const title = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (!title || seen.has(href)) continue;
       seen.add(href);
       entries.push({ title, company: "", linkedinUrl: href });
-    });
+    }
   } catch (e) {
     console.error("[email/parseDigest] rule-based HTML parse failed:", e.message);
   }

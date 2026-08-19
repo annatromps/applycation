@@ -9,7 +9,6 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
-    "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "docx": "^9.0.2",
     "express": "^4.19.2",
