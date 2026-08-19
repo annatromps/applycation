@@ -276,14 +276,17 @@ async function renderReview() {
 async function renderTracker() {
   main.innerHTML = `
     <h2>Tracker</h2>
-    <div class="filters">
-      <label style="margin:0;">Status:</label>
-      <select id="status-filter" style="width:220px;">
-        <option value="">All</option>
-        ${["discovered","reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"]
-          .map((s) => `<option value="${s}">${s.replace(/_/g, " ")}</option>`)
-          .join("")}
-      </select>
+    <div class="filters" style="justify-content:space-between;">
+      <div class="filters" style="margin:0;">
+        <label style="margin:0;">Status:</label>
+        <select id="status-filter" style="width:220px;">
+          <option value="">All</option>
+          ${["discovered","reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"]
+            .map((s) => `<option value="${s}">${s.replace(/_/g, " ")}</option>`)
+            .join("")}
+        </select>
+      </div>
+      <button id="add-job-manually" class="secondary">+ Add job manually</button>
     </div>
     <div class="card"><table id="tracker-table">
       <thead><tr><th>Role</th><th>Company</th><th>Status</th><th>Score</th><th>Discovered</th><th>Applied</th></tr></thead>
@@ -305,7 +308,7 @@ async function renderTracker() {
         <td>${esc(j.title)}</td>
         <td>${esc(j.company)}</td>
         <td><span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></td>
-        <td class="score ${scoreClass(j.score)}">${j.score}<div class="rating-mini">${ratingsBadgesHtml(j)}</div></td>
+        <td class="score ${scoreClass(j.score ?? -1)}">${j.score ?? "–"}<div class="rating-mini">${ratingsBadgesHtml(j)}</div></td>
         <td>${fmtDate(j.discoveredAt)}</td>
         <td>${fmtDate(j.appliedAt)}</td>
       </tr>`
@@ -314,7 +317,66 @@ async function renderTracker() {
     attachRowHandlers();
   };
   document.getElementById("status-filter").addEventListener("change", load);
+  document.getElementById("add-job-manually").addEventListener("click", () => openAddJobModal(load));
   load();
+}
+
+// ---------- Add job manually ----------
+// For roles found outside the automated sources — e.g. something you spotted
+// yourself, or an application already in flight before you started using
+// this app. No score gets fabricated for these; the Tracker just shows "–".
+function openAddJobModal(onSaved) {
+  const statuses = ["reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn"];
+  openModal(`
+    <span class="close-x" id="close-modal">&times;</span>
+    <h3>Add a job manually</h3>
+    <label>Job title *</label>
+    <input type="text" id="aj-title" />
+    <label>Company *</label>
+    <input type="text" id="aj-company" />
+    <div class="form-row">
+      <div>
+        <label>Location</label>
+        <input type="text" id="aj-location" />
+      </div>
+      <div>
+        <label>Status</label>
+        <select id="aj-status">${statuses.map((s) => `<option value="${s}">${s.replace(/_/g, " ")}</option>`).join("")}</select>
+      </div>
+    </div>
+    <label>Posting URL</label>
+    <input type="text" id="aj-url" placeholder="https://..." />
+    <label>Notes</label>
+    <textarea id="aj-notes"></textarea>
+    <div style="margin-top:12px;"><button id="aj-save">Add job</button><span id="aj-msg" class="hint"></span></div>
+  `);
+  document.getElementById("close-modal").addEventListener("click", closeModal);
+  document.getElementById("aj-save").addEventListener("click", async () => {
+    const title = document.getElementById("aj-title").value.trim();
+    const company = document.getElementById("aj-company").value.trim();
+    const msg = document.getElementById("aj-msg");
+    if (!title || !company) {
+      msg.textContent = "Title and company are required.";
+      return;
+    }
+    try {
+      await api("/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          company,
+          location: document.getElementById("aj-location").value.trim(),
+          status: document.getElementById("aj-status").value,
+          url: document.getElementById("aj-url").value.trim(),
+          notes: document.getElementById("aj-notes").value.trim(),
+        }),
+      });
+      closeModal();
+      onSaved();
+    } catch (err) {
+      msg.textContent = `Couldn't add job: ${err.message}`;
+    }
+  });
 }
 
 // ---------- Job detail modal ----------
@@ -325,7 +387,7 @@ async function openJobDetail(id) {
     <span class="close-x" id="close-modal">&times;</span>
     <h3>${esc(job.title)}</h3>
     <div class="meta">${esc(job.company)} · ${esc(job.location || "—")} · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a></div>
-    <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> &nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}</span></p>
+    <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> ${job.score != null ? `&nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}</span>` : ""}</p>
     ${ratingsDetailHtml(job)}
 
     <label>Was this a good match?</label>
@@ -407,6 +469,14 @@ async function renderSettings() {
   const isScheduled = settings.cadence && settings.cadence !== "manual";
   const frequency = isScheduled ? settings.cadence : "daily";
   const timeValue = `${String(settings.cadenceHourLocal ?? 7).padStart(2, "0")}:${String(settings.cadenceMinuteLocal ?? 0).padStart(2, "0")}`;
+  const aiProvider = settings.aiProvider || "none";
+  const aiConfigured = Boolean(aiProvider !== "none" && settings.aiApiKey);
+  const AI_PROVIDER_INFO = {
+    none: { placeholder: "", hint: "" },
+    anthropic: { placeholder: "sk-ant-...", hint: "Paid — console.anthropic.com → API Keys.", model: "claude-sonnet-4-5" },
+    groq: { placeholder: "gsk_...", hint: "Free, no card required — console.groq.com/keys.", model: "openai/gpt-oss-120b" },
+    gemini: { placeholder: "AIza...", hint: "Free, no card required — aistudio.google.com/apikey.", model: "gemini-2.5-flash" },
+  };
 
   document.getElementById("settings-body").innerHTML = `
     <div class="card">
@@ -463,8 +533,8 @@ async function renderSettings() {
                  : `<p class="hint">Inline preview isn't available for Word files in-browser — use View/Download above (View will prompt your system's Word viewer).</p>`
              }
              <div style="margin-top:12px;">
-               <button id="import-from-cv" ${settings.anthropicApiKey ? "" : "disabled"}>Auto-fill profile from this CV (AI)</button>
-               ${settings.anthropicApiKey ? "" : `<span class="hint">Add an Anthropic API key under Advanced settings to enable this.</span>`}
+               <button id="import-from-cv" ${aiConfigured ? "" : "disabled"}>Auto-fill profile from this CV (AI)</button>
+               ${aiConfigured ? "" : `<span class="hint">Add an AI provider + API key under Advanced settings to enable this (a free one works fine).</span>`}
              </div>`
           : `<p class="empty">No CV uploaded yet.</p>`
       }
@@ -513,11 +583,18 @@ async function renderSettings() {
       <p class="hint">If AI-assisted cover-letter drafting is on (see below), each generation is an API call — this caps spend per run. Anything skipped by the cap can still be generated manually from the job's detail view.</p>
 
       <div class="section-title">Optional: AI-assisted scoring &amp; cover letter drafting</div>
-      <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, and more natural cover-letter drafting. Leave blank to use plain rule-based scoring and template drafting instead — both work fully without a key.</p>
-      <label>Anthropic API key</label>
-      <input type="password" id="anthropicApiKey" value="${settings.anthropicApiKey ? "••••••••" : ""}" placeholder="sk-ant-..." />
-      <label>Model</label>
-      <input type="text" id="anthropicModel" value="${esc(settings.anthropicModel || "claude-sonnet-4-5")}" />
+      <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, more natural cover-letter drafting, CV auto-fill, and the CV tailoring summary. Leave provider as "None" to use plain rule-based scoring and template drafting instead — everything works fully without this. Groq and Gemini both have genuinely free tiers (no card required) if you don't want to pay for Anthropic credits.</p>
+      <label>AI provider</label>
+      <select id="aiProvider">
+        ${["none","groq","gemini","anthropic"].map((p) => `<option value="${p}" ${p === aiProvider ? "selected" : ""}>${p === "none" ? "None" : p === "anthropic" ? "Anthropic (Claude) — paid" : p === "groq" ? "Groq — free" : "Google Gemini — free"}</option>`).join("")}
+      </select>
+      <div id="ai-provider-fields" style="display:${aiProvider === "none" ? "none" : "block"};">
+        <label>API key</label>
+        <input type="password" id="aiApiKey" value="${settings.aiApiKey ? "••••••••" : ""}" placeholder="${AI_PROVIDER_INFO[aiProvider].placeholder}" />
+        <p class="hint" id="ai-provider-hint">${AI_PROVIDER_INFO[aiProvider].hint}</p>
+        <label>Model (leave blank for the default)</label>
+        <input type="text" id="aiModel" value="${esc(settings.aiModel || "")}" placeholder="${AI_PROVIDER_INFO[aiProvider].model || ""}" />
+      </div>
       <label>Max AI-scored jobs per discovery run (cost guard)</label>
       <input type="number" id="maxAiScoredPerCycle" min="0" value="${settings.maxAiScoredPerCycle ?? 15}" />
 
@@ -541,6 +618,15 @@ async function renderSettings() {
     document.getElementById("custom-cron-field").style.display = e.target.value === "custom" ? "block" : "none";
   });
 
+  document.getElementById("aiProvider").addEventListener("change", (e) => {
+    const p = e.target.value;
+    document.getElementById("ai-provider-fields").style.display = p === "none" ? "none" : "block";
+    const info = AI_PROVIDER_INFO[p];
+    document.getElementById("aiApiKey").placeholder = info.placeholder;
+    document.getElementById("aiModel").placeholder = info.model || "";
+    document.getElementById("ai-provider-hint").textContent = info.hint;
+  });
+
   function collectSettingsPayload() {
     const cadenceMode = document.querySelector('input[name="cadenceMode"]:checked').value;
     const [h, m] = document.getElementById("cadenceTime").value.split(":").map(Number);
@@ -554,8 +640,9 @@ async function renderSettings() {
       submissionMode: document.getElementById("submissionMode").value,
       autoGenerateMaterials: document.getElementById("autoGenerateMaterials").checked,
       maxMaterialsGeneratedPerCycle: Number(document.getElementById("maxMaterialsGeneratedPerCycle").value),
-      anthropicApiKey: document.getElementById("anthropicApiKey").value,
-      anthropicModel: document.getElementById("anthropicModel").value,
+      aiProvider: document.getElementById("aiProvider").value,
+      aiApiKey: document.getElementById("aiApiKey").value,
+      aiModel: document.getElementById("aiModel").value,
       maxAiScoredPerCycle: Number(document.getElementById("maxAiScoredPerCycle").value),
     };
   }

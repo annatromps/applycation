@@ -1,9 +1,12 @@
 // Turns raw extracted CV text into the structured candidate-profile shape
 // the CV/cover-letter generators use (see README's "Data model" section).
-// Requires an Anthropic API key (set in Settings) — there's no reliable
-// keyless way to reconstruct structured experience/bullets from arbitrary
-// CV formatting. Always returns a DRAFT for the user to review; nothing is
+// Requires an AI provider configured in Settings (Anthropic, or a free one
+// like Groq/Gemini — see server/ai/client.js) — there's no reliable keyless
+// way to reconstruct structured experience/bullets from arbitrary CV
+// formatting. Always returns a DRAFT for the user to review; nothing is
 // saved until they explicitly hit Save in the UI.
+
+const { callAI, isAIConfigured } = require("./../ai/client");
 
 const SCHEMA_HINT = `{
   "name": "string",
@@ -27,14 +30,13 @@ const SCHEMA_HINT = `{
 }`;
 
 async function importProfileFromText({ text, existingProfile, settings }) {
-  if (!settings.anthropicApiKey) {
-    throw new Error("Add an Anthropic API key in Settings first — AI-assisted profile import needs it to read your CV.");
+  if (!isAIConfigured(settings)) {
+    throw new Error("Add an AI provider + API key under Advanced settings first — AI-assisted profile import needs it to read your CV.");
   }
   if (!text || text.trim().length < 40) {
     throw new Error("Couldn't find enough readable text in that file to import from.");
   }
 
-  const model = settings.anthropicModel || "claude-sonnet-4-5";
   const prompt = [
     "Extract this person's CV/resume into structured JSON matching EXACTLY this shape (no extra top-level keys):",
     SCHEMA_HINT,
@@ -49,22 +51,7 @@ async function importProfileFromText({ text, existingProfile, settings }) {
     text.slice(0, 15000),
   ].join("\n");
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": settings.anthropicApiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({ model, max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
-  });
-
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => "");
-    throw new Error(`Anthropic API request failed (${res.status}): ${errBody.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const raw = (data.content || []).map((c) => c.text || "").join("\n").trim();
+  const raw = await callAI(settings, { prompt, maxTokens: 4000 });
   const jsonText = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
 
   let parsed;

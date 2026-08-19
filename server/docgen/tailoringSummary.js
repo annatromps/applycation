@@ -8,6 +8,7 @@
 // so it can't introduce anything not already in the profile).
 
 const { keywordsOf } = require("./cv");
+const { callAI, isAIConfigured } = require("./../ai/client");
 
 function relevance(bulletText, jobKeywordSet) {
   const words = keywordsOf(bulletText);
@@ -45,8 +46,7 @@ function notesToPlainText(notes) {
 }
 
 async function draftWithAI(notes, job, settings) {
-  if (!settings.anthropicApiKey || !notes.length) return null;
-  const model = settings.anthropicModel || "claude-sonnet-4-5";
+  if (!isAIConfigured(settings) || !notes.length) return null;
   const prompt = [
     "Explain, in 2-4 short plain-English sentences (no bullet points, no headers), how a candidate's CV was tailored for a specific job application.",
     "IMPORTANT: the CV's CONTENT was not changed — only the ORDER of existing, true bullet points under each role was adjusted so the most relevant one leads. Never imply anything was added, invented, or embellished. Just explain what was promoted to the top of each affected role and why it's relevant to this posting, in a natural, confident tone.",
@@ -59,14 +59,7 @@ async function draftWithAI(notes, job, settings) {
   ].join("\n");
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": settings.anthropicApiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model, max_tokens: 300, messages: [{ role: "user", content: prompt }] }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const text = (data.content || []).map((c) => c.text || "").join("\n").trim();
+    const text = await callAI(settings, { prompt, maxTokens: 300 });
     return text || null;
   } catch (e) {
     console.error("[tailoringSummary] AI drafting failed, falling back to rule-based summary:", e.message);

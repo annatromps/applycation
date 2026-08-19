@@ -8,6 +8,8 @@
 // the job to produce a qualitative score+reasons, blended with the
 // rule-based score in discovery.js.
 
+const { callAI } = require("./ai/client");
+
 function textIncludes(haystack, needle) {
   if (!haystack || !needle) return false;
   return haystack.toLowerCase().includes(needle.toLowerCase());
@@ -195,15 +197,12 @@ function scoreJob(job, criteria) {
  * each. Lets you express nuance ("avoid heavily bureaucratic companies",
  * "prefer teams that ship fast", "I need at least 30 days holiday") that
  * keyword rules can't capture, especially for the second rating since it can
- * read perks/benefits straight out of the posting text. Requires
- * settings.anthropicApiKey; callers should treat a thrown error as "skip AI
- * scoring for this job" rather than fatal.
+ * read perks/benefits straight out of the posting text. Requires an AI
+ * provider configured in settings (see server/ai/client.js — works with a
+ * free provider like Groq or Gemini, not just Anthropic); callers should
+ * treat a thrown error as "skip AI scoring for this job" rather than fatal.
  */
 async function scoreJobWithAI(job, criteria, settings, feedbackContext) {
-  if (!settings.anthropicApiKey) {
-    throw new Error("No Anthropic API key configured — AI-assisted scoring is unavailable.");
-  }
-  const model = settings.anthropicModel || "claude-sonnet-4-5";
   const prompt = [
     "You are screening a job posting for a candidate, on two SEPARATE dimensions. Respond with ONLY a JSON object, no markdown fences, no commentary:",
     '{"candidateFitScore": <0-100 integer>, "candidateFitReasons": ["short reason", "..."], "roleAppealScore": <0-100 integer>, "roleAppealReasons": ["short reason", "..."]}',
@@ -243,14 +242,7 @@ async function scoreJobWithAI(job, criteria, settings, feedbackContext) {
       : []),
   ].join("\n");
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": settings.anthropicApiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
-  });
-  if (!res.ok) throw new Error(`Anthropic API request failed (${res.status})`);
-  const data = await res.json();
-  const raw = (data.content || []).map((c) => c.text || "").join("\n").trim();
+  const raw = await callAI(settings, { prompt, maxTokens: 600 });
   const jsonText = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
   const parsed = JSON.parse(jsonText);
   const clamp = (n) => Math.max(0, Math.min(100, Number(n) || 0));

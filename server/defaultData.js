@@ -12,8 +12,9 @@ function defaultData() {
       },
       submissionMode: "manual", // "manual" | "assisted" | "ask_each_time"
       minScoreToSurface: 55,
-      anthropicApiKey: "", // optional: enables AI-assisted scoring/drafting
-      anthropicModel: "claude-sonnet-4-5",
+      aiProvider: "none", // "none" | "anthropic" (paid) | "groq" (free) | "gemini" (free) — see server/ai/client.js
+      aiApiKey: "", // key for whichever provider is selected above
+      aiModel: "", // blank = provider's sensible default (see server/ai/client.js's DEFAULT_MODELS)
       maxAiScoredPerCycle: 15, // cost guard: cap AI-assisted scoring calls per discovery run
       autoGenerateMaterials: true, // build & save a tailored CV + cover letter for every surfaced match automatically
       maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)

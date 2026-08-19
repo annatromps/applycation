@@ -2,8 +2,8 @@
 //   1. Template mode (default, no API key needed): picks the candidate's
 //      most relevant "talking points" for this posting and assembles them
 //      into paragraphs.
-//   2. AI-assisted mode (if settings.anthropicApiKey is set): sends the
-//      selected talking points + job description + house rules to Claude
+//   2. AI-assisted mode (if an AI provider is configured in settings): sends
+//      the selected talking points + job description + house rules to it
 //      for a more naturally-written draft, then falls back to template
 //      mode if the API call fails for any reason.
 //
@@ -15,6 +15,7 @@ const path = require("path");
 const { Document, Packer, TextRun, Paragraph } = require("docx");
 const { FONT, A4_PAGE } = require("./style");
 const { keywordsOf } = require("./cv");
+const { callAI, isAIConfigured } = require("./../ai/client");
 
 function p(text, opts = {}) {
   return new Paragraph({ spacing: { after: 200 }, children: [new TextRun({ text, font: FONT, size: 22, ...opts })] });
@@ -57,8 +58,7 @@ function buildTemplateParagraphs(profile, job, talkingPoints) {
 }
 
 async function draftWithAI({ profile, job, talkingPoints, settings }) {
-  if (!settings.anthropicApiKey) return null;
-  const model = settings.anthropicModel || "claude-sonnet-4-5";
+  if (!isAIConfigured(settings)) return null;
   const prompt = [
     `Candidate summary: ${profile.summary || ""}`,
     `Candidate name: ${profile.name}`,
@@ -74,22 +74,7 @@ async function draftWithAI({ profile, job, talkingPoints, settings }) {
   ].join("\n");
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": settings.anthropicApiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 900,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const text = (data.content || []).map((c) => c.text || "").join("\n").trim();
+    const text = await callAI(settings, { prompt, maxTokens: 900 });
     if (!text) return null;
     return text.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
   } catch (e) {

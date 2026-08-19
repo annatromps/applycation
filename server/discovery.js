@@ -4,6 +4,7 @@ const { discoverJobs } = require("./sources");
 const { scoreJob, scoreJobWithAI, buildFeedbackContext } = require("./scoring");
 const { buildMaterialsForJob } = require("./docgen/materials");
 const { sendNotification } = require("./notify");
+const { isAIConfigured } = require("./ai/client");
 
 const AI_PRESCREEN_THRESHOLD = 35; // don't bother spending an AI call on jobs the rules already hate
 
@@ -63,7 +64,7 @@ async function runDiscoveryCycle() {
     // already cleared a low rule-based bar are considered, and at most
     // `maxAiScoredPerCycle` calls are made, spent on the strongest
     // rule-based candidates first.
-    const useAI = Boolean(data.settings.anthropicApiKey && (criteria.aiPreferences || "").trim());
+    const useAI = isAIConfigured(data.settings) && Boolean((criteria.aiPreferences || "").trim());
     if (useAI) {
       const eligible = candidates
         .filter((c) => c.ruleScore >= AI_PRESCREEN_THRESHOLD)
