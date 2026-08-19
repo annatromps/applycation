@@ -33,9 +33,16 @@ async function runDiscoveryCycle() {
       if (existingKeys.has(key)) continue; // already discovered in a prior run
       existingKeys.add(key);
 
-      const { score, hardFail, reasons } = scoreJob(job, criteria);
+      const { score, candidateFitScore, roleAppealScore, hardFail, reasons, reasonsByCategory } = scoreJob(job, criteria);
       if (hardFail) continue; // never surface dealbreaker matches at all
-      candidates.push({ job, ruleScore: score, reasons });
+      candidates.push({
+        job,
+        ruleScore: score,
+        ruleCandidateFit: candidateFitScore,
+        ruleRoleAppeal: roleAppealScore,
+        reasons,
+        reasonsByCategory,
+      });
     }
 
     // Optional AI-assisted second pass, driven by the profile's free-text
@@ -52,8 +59,13 @@ async function runDiscoveryCycle() {
       for (const c of eligible) {
         try {
           const ai = await scoreJobWithAI(c.job, criteria, data.settings, feedbackContext);
-          c.finalScore = Math.round((c.ruleScore + ai.score) / 2);
-          c.reasons = [...c.reasons, ...ai.reasons];
+          c.finalCandidateFit = Math.round((c.ruleCandidateFit + ai.candidateFitScore) / 2);
+          c.finalRoleAppeal = Math.round((c.ruleRoleAppeal + ai.roleAppealScore) / 2);
+          c.reasonsByCategory = {
+            candidateFit: [...c.reasonsByCategory.candidateFit, ...ai.candidateFitReasons],
+            roleAppeal: [...c.reasonsByCategory.roleAppeal, ...ai.roleAppealReasons],
+          };
+          c.reasons = [...c.reasonsByCategory.candidateFit, ...c.reasonsByCategory.roleAppeal];
         } catch (e) {
           console.error(`[discovery] AI scoring failed for "${c.job.title}":`, e.message);
         }
@@ -61,7 +73,9 @@ async function runDiscoveryCycle() {
     }
 
     for (const c of candidates) {
-      const finalScore = c.finalScore ?? c.ruleScore;
+      const candidateFitScore = c.finalCandidateFit ?? c.ruleCandidateFit;
+      const roleAppealScore = c.finalRoleAppeal ?? c.ruleRoleAppeal;
+      const finalScore = Math.round((candidateFitScore + roleAppealScore) / 2);
       if (finalScore < (data.settings.minScoreToSurface ?? 55)) continue;
 
       const record = {
@@ -70,7 +84,10 @@ async function runDiscoveryCycle() {
         matchedCriteriaId: criteria.id,
         matchedCriteriaName: criteria.name,
         score: finalScore,
+        candidateFitScore, // 0-100 — "how good a match am I for its requirements"
+        roleAppealScore, // 0-100 — "how good does this look for me" (perks/salary/fit)
         scoreReasons: c.reasons,
+        reasonsByCategory: c.reasonsByCategory,
         discoveredAt: new Date().toISOString(),
         status: "discovered",
         statusHistory: [{ status: "discovered", at: new Date().toISOString() }],

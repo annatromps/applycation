@@ -38,6 +38,42 @@ function scoreClass(score) {
   return "low";
 }
 
+// ---------- Two-category ratings (candidate fit vs role appeal) ----------
+// job.candidateFitScore/roleAppealScore are 0-100 (see server/scoring.js);
+// displayed as X/10. Older jobs discovered before this feature exists won't
+// have these fields — fall back to "–" rather than guessing.
+function toTen(score100) {
+  return score100 == null ? null : Math.max(0, Math.min(10, Math.round(score100 / 10)));
+}
+
+function ratingsBadgesHtml(j) {
+  const cf = toTen(j.candidateFitScore);
+  const ra = toTen(j.roleAppealScore);
+  return `<span class="rating-badge" title="How good a match you are for this job's requirements">🎯 ${cf ?? "–"}/10</span><span class="rating-badge" title="How good this role looks for you — perks, salary, fit to your preferences">✨ ${ra ?? "–"}/10</span>`;
+}
+
+function ratingsDetailHtml(j) {
+  const cf = toTen(j.candidateFitScore);
+  const ra = toTen(j.roleAppealScore);
+  const byCat = j.reasonsByCategory || {};
+  const list = (arr) =>
+    arr && arr.length ? arr.map((r) => `<li>${esc(r)}</li>`).join("") : `<li class="hint">No breakdown available for this job.</li>`;
+  return `
+    <div class="ratings-grid">
+      <div class="rating-block">
+        <div class="rating-label">🎯 Match for requirements</div>
+        <div class="rating-value">${cf ?? "–"}/10</div>
+        <ul class="reasons">${list(byCat.candidateFit || (j.candidateFitScore == null ? null : []))}</ul>
+      </div>
+      <div class="rating-block">
+        <div class="rating-label">✨ Good for you</div>
+        <div class="rating-value">${ra ?? "–"}/10</div>
+        <ul class="reasons">${list(byCat.roleAppeal || (j.roleAppealScore == null ? null : []))}</ul>
+      </div>
+    </div>
+  `;
+}
+
 function closeModal() {
   modalRoot.innerHTML = "";
 }
@@ -153,7 +189,7 @@ function jobRowHtml(j) {
   return `
     <div class="list-item" data-job-id="${j.id}">
       <h4>${esc(j.title)} <span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></h4>
-      <div class="meta">${esc(j.company)} · ${esc(j.location || "—")} · <span class="score ${scoreClass(j.score)}">Score ${j.score}</span> · discovered ${fmtDate(j.discoveredAt)}</div>
+      <div class="meta">${esc(j.company)} · ${esc(j.location || "—")} · ${ratingsBadgesHtml(j)} · discovered ${fmtDate(j.discoveredAt)}</div>
     </div>
   `;
 }
@@ -182,7 +218,7 @@ async function renderReview() {
       <div class="meta">${esc(j.company)} · ${esc(j.location || "—")} · via ${esc(j.source)} · discovered ${fmtDate(j.discoveredAt)}
         &nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>
       </div>
-      <ul class="reasons">${(j.scoreReasons || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+      ${ratingsDetailHtml(j)}
       ${feedbackRowHtml(j)}
       <button data-approve="${j.id}">Approve &amp; prepare materials</button>
       <button class="secondary" data-detail="${j.id}">Details</button>
@@ -252,7 +288,7 @@ async function renderTracker() {
         <td>${esc(j.title)}</td>
         <td>${esc(j.company)}</td>
         <td><span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></td>
-        <td class="score ${scoreClass(j.score)}">${j.score}</td>
+        <td class="score ${scoreClass(j.score)}">${j.score}<div class="rating-mini">${ratingsBadgesHtml(j)}</div></td>
         <td>${fmtDate(j.discoveredAt)}</td>
         <td>${fmtDate(j.appliedAt)}</td>
       </tr>`
@@ -272,8 +308,8 @@ async function openJobDetail(id) {
     <span class="close-x" id="close-modal">&times;</span>
     <h3>${esc(job.title)}</h3>
     <div class="meta">${esc(job.company)} · ${esc(job.location || "—")} · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a></div>
-    <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> &nbsp; <span class="score ${scoreClass(job.score)}">Score ${job.score}</span></p>
-    <ul class="reasons">${(job.scoreReasons || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+    <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> &nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}</span></p>
+    ${ratingsDetailHtml(job)}
 
     <label>Was this a good match?</label>
     ${feedbackRowHtml(job)}

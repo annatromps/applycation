@@ -110,6 +110,15 @@ label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; c
 .tag-input-preview { font-size: 12px; color: var(--grey); margin-top: 4px; }
 .section-title { margin-top: 32px; font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--grey); }
 
+.rating-badge { display: inline-block; font-size: 12px; font-weight: 600; color: var(--navy); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; margin-right: 6px; }
+.rating-mini { margin-top: 2px; }
+.rating-mini .rating-badge { font-size: 10px; padding: 1px 6px; margin-right: 3px; }
+.ratings-grid { display: flex; gap: 16px; margin: 10px 0; flex-wrap: wrap; }
+.rating-block { flex: 1; min-width: 220px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+.rating-label { font-size: 12px; font-weight: 600; color: var(--grey); text-transform: uppercase; letter-spacing: 0.03em; }
+.rating-value { font-size: 22px; font-weight: 700; color: var(--navy); margin: 2px 0 4px; }
+.rating-block .reasons { margin: 4px 0 0; }
+
 .feedback-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
 .fb-btn { background: none; border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; font-size: 15px; line-height: 1.4; cursor: pointer; }
 .fb-btn:hover { background: var(--bg); }
