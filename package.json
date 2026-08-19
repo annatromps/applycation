@@ -9,9 +9,12 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
+    "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "docx": "^9.0.2",
     "express": "^4.19.2",
+    "imapflow": "^1.7.1",
+    "mailparser": "^3.9.15",
     "mammoth": "^1.12.1",
     "multer": "^2.2.0",
     "node-cron": "^3.0.3",

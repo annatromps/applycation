@@ -19,6 +19,19 @@ function defaultData() {
       autoGenerateMaterials: true, // build & save a tailored CV + cover letter for every surfaced match automatically
       maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)
       timezone: "Europe/Madrid",
+      // Optional: import LinkedIn job-alert digest emails via IMAP. Only
+      // ever reads mail already sent to this inbox — never fetches
+      // anything from linkedin.com itself. See server/email/.
+      emailInbox: {
+        enabled: false,
+        host: "imap.gmail.com",
+        port: 993,
+        secure: true,
+        user: "",
+        appPassword: "", // a Gmail "App password", not your real password
+        folder: "INBOX",
+        senderFilter: "jobs-noreply@linkedin.com",
+      },
     },
     criteriaProfiles: [],
     candidateProfile: null,
