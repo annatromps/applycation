@@ -4,6 +4,8 @@ const router = express.Router();
 const db = require("./../db");
 const { runDiscoveryCycle } = require("./../discovery");
 const { buildMaterialsForJob } = require("./../docgen/materials");
+const { scoreJob, scoreJobWithAI, buildFeedbackContext } = require("./../scoring");
+const { isAIConfigured } = require("./../ai/client");
 
 const VALID_STATUSES = [
   "discovered", "reviewing", "approved", "materials_ready",
@@ -22,6 +24,7 @@ function publicMaterials(materials) {
     cvFilename: materials.cvFilename,
     coverLetterFilename: materials.coverLetterFilename,
     tailoringSummary: materials.tailoringSummary || null,
+    reviewQuestions: materials.reviewQuestions || [],
   };
 }
 
@@ -43,10 +46,13 @@ router.get("/:id", async (req, res) => {
 
 // Manually add a job found outside the automated sources (e.g. one you
 // found yourself on a board this app doesn't search, or an application you
-// already had in flight before you started using it). No scoring runs on
-// these — there's no criteria profile to score against a job you added by
-// hand — so score/candidateFitScore/roleAppealScore stay null and the UI
-// shows "–/10" rather than a fabricated number.
+// already had in flight before you started using it). Scored against your
+// active criteria profile(s) exactly like an auto-discovered job would be
+// (best-matching profile wins) — using whatever fields you gave it, so a
+// job added with just a title/company still gets a real, if thinner, score
+// rather than a permanent "–/10". Only stays null if you have no active
+// criteria profile configured at all — there's genuinely nothing to score
+// it against then.
 router.post("/", async (req, res) => {
   const { title, company, location, url, status, notes, salary, description, source } = req.body || {};
   if (!title || !company) {
@@ -58,6 +64,71 @@ router.post("/", async (req, res) => {
   const data = await db.read();
   const now = new Date().toISOString();
   const initialStatus = status || "reviewing";
+
+  const jobForScoring = {
+    title,
+    company,
+    location: location || "",
+    remote: false,
+    salary: salary || "",
+    description: description || "",
+    url: url || "",
+  };
+
+  let scoreFields = {
+    matchedCriteriaId: null,
+    matchedCriteriaName: null,
+    score: null,
+    candidateFitScore: null,
+    roleAppealScore: null,
+    scoreReasons: [],
+    reasonsByCategory: { candidateFit: [], roleAppeal: [] },
+  };
+
+  const activeProfiles = (data.criteriaProfiles || []).filter((c) => c.active !== false);
+  if (activeProfiles.length) {
+    // Score against every active profile, keep whichever fits best — same
+    // "best matching profile wins" idea as discovery, just for one job.
+    let best = null;
+    for (const criteria of activeProfiles) {
+      const r = scoreJob(jobForScoring, criteria);
+      if (r.hardFail) continue;
+      if (!best || r.score > best.result.score) best = { criteria, result: r };
+    }
+    if (best) {
+      let { score, candidateFitScore, roleAppealScore, reasons, reasonsByCategory } = best.result;
+      const useAI =
+        isAIConfigured(data.settings) &&
+        Boolean((best.criteria.aiPreferences || "").trim()) &&
+        Boolean(description && description.trim());
+      if (useAI) {
+        try {
+          const feedbackContext = buildFeedbackContext(data.jobs);
+          const ai = await scoreJobWithAI(jobForScoring, best.criteria, data.settings, feedbackContext);
+          candidateFitScore = Math.round((candidateFitScore + ai.candidateFitScore) / 2);
+          roleAppealScore = Math.round((roleAppealScore + ai.roleAppealScore) / 2);
+          reasonsByCategory = {
+            candidateFit: [...reasonsByCategory.candidateFit, ...ai.candidateFitReasons],
+            roleAppeal: [...reasonsByCategory.roleAppeal, ...ai.roleAppealReasons],
+          };
+          reasons = [...reasonsByCategory.candidateFit, ...reasonsByCategory.roleAppeal];
+          score = Math.round((candidateFitScore + roleAppealScore) / 2);
+        } catch (e) {
+          console.error(`[jobs] AI scoring failed for manually-added "${title}":`, e.message);
+        }
+      }
+      scoreFields = {
+        matchedCriteriaId: best.criteria.id,
+        matchedCriteriaName: best.criteria.name,
+        score,
+        candidateFitScore,
+        roleAppealScore,
+        scoreReasons: reasons,
+        reasonsByCategory,
+      };
+    }
+  }
+
   const record = {
     id: crypto.randomUUID(),
     title,
@@ -69,13 +140,7 @@ router.post("/", async (req, res) => {
     url: url || "",
     source: source || "manual",
     sourceId: crypto.randomUUID(),
-    matchedCriteriaId: null,
-    matchedCriteriaName: null,
-    score: null,
-    candidateFitScore: null,
-    roleAppealScore: null,
-    scoreReasons: [],
-    reasonsByCategory: { candidateFit: [], roleAppeal: [] },
+    ...scoreFields,
     discoveredAt: now,
     status: initialStatus,
     statusHistory: [{ status: initialStatus, at: now, note: "Added manually" }],
@@ -86,6 +151,18 @@ router.post("/", async (req, res) => {
     outcomeAt: null,
     outcome: null,
   };
+
+  // Same auto-generation behaviour as discovery: build materials right away
+  // if you've left that setting on and have a candidate profile saved, so
+  // this job is just as "ready" as one the automated search would surface.
+  if (data.settings.autoGenerateMaterials !== false && data.candidateProfile) {
+    try {
+      record.materials = await buildMaterialsForJob(data.candidateProfile, record, data.settings);
+    } catch (e) {
+      console.error(`[jobs] Auto-generating materials failed for manually-added "${title}":`, e.message);
+    }
+  }
+
   data.jobs.push(record);
   await db.write(data);
   const { materials, ...rest } = record;
