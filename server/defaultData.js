@@ -14,6 +14,8 @@ function defaultData() {
       anthropicApiKey: "", // optional: enables AI-assisted scoring/drafting
       anthropicModel: "claude-sonnet-4-5",
       maxAiScoredPerCycle: 15, // cost guard: cap AI-assisted scoring calls per discovery run
+      autoGenerateMaterials: true, // build & save a tailored CV + cover letter for every surfaced match automatically
+      maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)
       timezone: "Europe/Madrid",
     },
     criteriaProfiles: [],

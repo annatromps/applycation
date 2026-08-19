@@ -102,6 +102,14 @@ function feedbackRowHtml(j) {
   `;
 }
 
+// Compact "materials ready" line reused in the Review Queue — job.materials
+// is auto-generated at discovery time by default (see Settings), so it's
+// often already there before you've even opened the job.
+function materialsLineHtml(j) {
+  if (!j.materials) return `<p class="hint">📄 CV &amp; cover letter not generated yet.</p>`;
+  return `<p class="hint">📄 CV &amp; cover letter ready (${fmtDate(j.materials.generatedAt)}) — <a href="/api/jobs/${j.id}/materials/cv" target="_blank">CV</a> &nbsp;·&nbsp; <a href="/api/jobs/${j.id}/materials/cover-letter" target="_blank">Cover letter</a></p>`;
+}
+
 function attachFeedbackHandlers(root, jobsById, onChange) {
   root.querySelectorAll(".feedback-row").forEach((row) => {
     const id = row.dataset.feedbackId;
@@ -220,7 +228,8 @@ async function renderReview() {
       </div>
       ${ratingsDetailHtml(j)}
       ${feedbackRowHtml(j)}
-      <button data-approve="${j.id}">Approve &amp; prepare materials</button>
+      ${materialsLineHtml(j)}
+      <button data-approve="${j.id}">${j.materials ? "Approve" : "Approve & prepare materials"}</button>
       <button class="secondary" data-detail="${j.id}">Details</button>
       <button class="secondary" data-dismiss="${j.id}">Dismiss</button>
     </div>
@@ -232,17 +241,24 @@ async function renderReview() {
 
   body.querySelectorAll("[data-approve]").forEach((btn) =>
     btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      btn.textContent = "Preparing…";
       const id = btn.dataset.approve;
+      const job = jobs.find((j) => j.id === id);
+      const alreadyHasMaterials = Boolean(job && job.materials);
+      btn.disabled = true;
+      btn.textContent = alreadyHasMaterials ? "Approving…" : "Preparing…";
       try {
-        await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "approved" }) });
-        await api(`/jobs/${id}/generate-materials`, { method: "POST" });
+        if (alreadyHasMaterials) {
+          // Materials were already auto-generated at discovery time — just move the status forward.
+          await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "materials_ready" }) });
+        } else {
+          await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "approved" }) });
+          await api(`/jobs/${id}/generate-materials`, { method: "POST" });
+        }
         renderReview();
       } catch (err) {
         alert(`Couldn't prepare materials: ${err.message}`);
         btn.disabled = false;
-        btn.textContent = "Approve & prepare materials";
+        btn.textContent = alreadyHasMaterials ? "Approve" : "Approve & prepare materials";
       }
     })
   );
@@ -423,6 +439,16 @@ async function renderSettings() {
         <option value="ask_each_time" ${settings.submissionMode === "ask_each_time" ? "selected" : ""}>Ask each time</option>
       </select>
 
+      <div class="section-title">Application materials</div>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
+        <input type="checkbox" id="autoGenerateMaterials" ${settings.autoGenerateMaterials !== false ? "checked" : ""} style="width:auto;" />
+        Automatically generate a tailored CV &amp; cover letter for every match, saved against that job
+      </label>
+      <p class="hint">Turn this off to only generate materials when you hit "Approve" on a job instead.</p>
+      <label>Max materials auto-generated per discovery run (cost guard)</label>
+      <input type="number" id="maxMaterialsGeneratedPerCycle" min="0" value="${settings.maxMaterialsGeneratedPerCycle ?? 20}" />
+      <p class="hint">If AI-assisted cover-letter drafting is on (see below), each generation is an API call — this caps spend per run. Anything skipped by the cap can still be generated manually from the job's detail view.</p>
+
       <div class="section-title">Optional: AI-assisted scoring &amp; cover letter drafting</div>
       <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, and more natural cover-letter drafting. Leave blank to use plain rule-based scoring and template drafting instead — both work fully without a key.</p>
       <label>Anthropic API key</label>
@@ -486,6 +512,8 @@ async function renderSettings() {
       minScoreToSurface: Number(document.getElementById("minScore").value),
       notifications: { mode: document.getElementById("notifMode").value, webhookUrl: document.getElementById("webhookUrl").value },
       submissionMode: document.getElementById("submissionMode").value,
+      autoGenerateMaterials: document.getElementById("autoGenerateMaterials").checked,
+      maxMaterialsGeneratedPerCycle: Number(document.getElementById("maxMaterialsGeneratedPerCycle").value),
       anthropicApiKey: document.getElementById("anthropicApiKey").value,
       anthropicModel: document.getElementById("anthropicModel").value,
       maxAiScoredPerCycle: Number(document.getElementById("maxAiScoredPerCycle").value),

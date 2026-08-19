@@ -2,8 +2,7 @@ const express = require("express");
 const router = express.Router();
 const db = require("./../db");
 const { runDiscoveryCycle } = require("./../discovery");
-const { buildCVBuffer } = require("./../docgen/cv");
-const { buildCoverLetterBuffer } = require("./../docgen/coverLetter");
+const { buildMaterialsForJob } = require("./../docgen/materials");
 
 const VALID_STATUSES = [
   "discovered", "reviewing", "approved", "materials_ready",
@@ -101,28 +100,14 @@ router.post("/:id/generate-materials", async (req, res) => {
   if (!job) return res.status(404).json({ error: "not found" });
   if (!data.candidateProfile) return res.status(400).json({ error: "No candidate profile configured yet — set one up under Settings first." });
 
-  const safeCompany = (job.company || "company").replace(/[^a-z0-9\- ]/gi, "").trim();
-  const cvFilename = `${data.candidateProfile.name} - CV - ${safeCompany}.docx`;
-  const coverLetterFilename = `${data.candidateProfile.name} - Cover Letter - ${safeCompany}.docx`;
-
-  let cvBuf, clBuf;
-  try {
-    cvBuf = await buildCVBuffer(data.candidateProfile, job);
-    clBuf = await buildCoverLetterBuffer(data.candidateProfile, job, data.settings);
-  } catch (e) {
-    return res.status(500).json({ error: `Materials generation failed: ${e.message}` });
-  }
-
   // Stored as base64 inside the same JSON blob as everything else, rather
   // than written to local disk — keeps generated documents persistent
   // across restarts/redeploys on hosts with ephemeral filesystems.
-  job.materials = {
-    cvBase64: cvBuf.toString("base64"),
-    coverLetterBase64: clBuf.toString("base64"),
-    cvFilename,
-    coverLetterFilename,
-    generatedAt: new Date().toISOString(),
-  };
+  try {
+    job.materials = await buildMaterialsForJob(data.candidateProfile, job, data.settings);
+  } catch (e) {
+    return res.status(500).json({ error: `Materials generation failed: ${e.message}` });
+  }
   job.status = "materials_ready";
   job.statusHistory.push({ status: "materials_ready", at: new Date().toISOString() });
   await db.write(data);

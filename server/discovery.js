@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const db = require("./db");
 const { discoverJobs } = require("./sources");
 const { scoreJob, scoreJobWithAI, buildFeedbackContext } = require("./scoring");
+const { buildMaterialsForJob } = require("./docgen/materials");
 const { sendNotification } = require("./notify");
 
 const AI_PRESCREEN_THRESHOLD = 35; // don't bother spending an AI call on jobs the rules already hate
@@ -23,6 +24,18 @@ async function runDiscoveryCycle() {
   // fed into the AI scoring pass below so matching actually improves over
   // time instead of just displaying the feedback back at you.
   const feedbackContext = buildFeedbackContext(data.jobs);
+
+  // Auto-generate a tailored CV + cover letter for every surfaced match, so
+  // materials are already waiting when you open it — on by default, but a
+  // real cost guard: AI-assisted cover-letter drafting (if an Anthropic key
+  // is set) makes one API call per job, so this is capped per cycle just
+  // like the AI scoring pass above. Skipped entirely with no candidate
+  // profile set yet; anything skipped by the cap can still be generated
+  // manually from the job's detail view.
+  const autoGenerateMaterials = data.settings.autoGenerateMaterials !== false && Boolean(data.candidateProfile);
+  const maxMaterialsPerCycle = data.settings.maxMaterialsGeneratedPerCycle ?? 20;
+  let materialsGeneratedThisCycle = 0;
+  let materialsSkippedForCap = 0;
 
   for (const criteria of activeProfiles) {
     const found = await discoverJobs(criteria);
@@ -98,9 +111,29 @@ async function runDiscoveryCycle() {
         outcomeAt: null,
         outcome: null,
       };
+
+      if (autoGenerateMaterials) {
+        if (materialsGeneratedThisCycle < maxMaterialsPerCycle) {
+          try {
+            record.materials = await buildMaterialsForJob(data.candidateProfile, record, data.settings);
+            materialsGeneratedThisCycle++;
+          } catch (e) {
+            console.error(`[discovery] Auto-generating materials failed for "${record.title}":`, e.message);
+          }
+        } else {
+          materialsSkippedForCap++;
+        }
+      }
+
       data.jobs.push(record);
       newlyAdded.push(record);
     }
+  }
+
+  if (materialsSkippedForCap) {
+    console.log(
+      `[discovery] Skipped auto-generating materials for ${materialsSkippedForCap} match(es) — hit the ${maxMaterialsPerCycle}/cycle cap. Generate manually from each job's detail view, or raise "Max materials generated per cycle" in Settings.`
+    );
   }
 
   data.meta.lastDiscoveryRun = new Date().toISOString();
