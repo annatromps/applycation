@@ -9,16 +9,18 @@
 const { buildCVBuffer } = require("./cv");
 const { buildCoverLetterBuffer } = require("./coverLetter");
 const { buildTailoringSummary } = require("./tailoringSummary");
+const { buildReviewQuestions } = require("./reviewQuestions");
 
 async function buildMaterialsForJob(candidateProfile, job, settings) {
   const safeCompany = (job.company || "company").replace(/[^a-z0-9\- ]/gi, "").trim();
   const cvFilename = `${candidateProfile.name} - CV - ${safeCompany}.docx`;
   const coverLetterFilename = `${candidateProfile.name} - Cover Letter - ${safeCompany}.docx`;
 
-  const [cvBuf, coverLetterBuf, tailoringSummary] = await Promise.all([
+  const [cvBuf, coverLetterBuf, tailoringSummary, reviewQuestions] = await Promise.all([
     buildCVBuffer(candidateProfile, job),
     buildCoverLetterBuffer(candidateProfile, job, settings),
     buildTailoringSummary(candidateProfile, job, settings),
+    buildReviewQuestions(candidateProfile, job, settings),
   ]);
 
   return {
@@ -27,6 +29,7 @@ async function buildMaterialsForJob(candidateProfile, job, settings) {
     cvFilename,
     coverLetterFilename,
     tailoringSummary, // plain-English explanation of how the CV's bullet order was tailored for this job — see tailoringSummary.js
+    reviewQuestions, // short list of things to consider before applying — see reviewQuestions.js
     generatedAt: new Date().toISOString(),
   };
 }
