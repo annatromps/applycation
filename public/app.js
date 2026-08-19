@@ -107,7 +107,8 @@ function feedbackRowHtml(j) {
 // often already there before you've even opened the job.
 function materialsLineHtml(j) {
   if (!j.materials) return `<p class="hint">📄 CV &amp; cover letter not generated yet.</p>`;
-  return `<p class="hint">📄 CV &amp; cover letter ready (${fmtDate(j.materials.generatedAt)}) — <a href="/api/jobs/${j.id}/materials/cv" target="_blank">CV</a> &nbsp;·&nbsp; <a href="/api/jobs/${j.id}/materials/cover-letter" target="_blank">Cover letter</a></p>`;
+  return `<p class="hint">📄 CV &amp; cover letter ready (${fmtDate(j.materials.generatedAt)}) — <a href="/api/jobs/${j.id}/materials/cv" target="_blank">CV</a> &nbsp;·&nbsp; <a href="/api/jobs/${j.id}/materials/cover-letter" target="_blank">Cover letter</a></p>
+    ${j.materials.tailoringSummary ? `<p class="hint">✏️ ${esc(j.materials.tailoringSummary)}</p>` : ""}`;
 }
 
 function attachFeedbackHandlers(root, jobsById, onChange) {
@@ -346,7 +347,12 @@ async function openJobDetail(id) {
       job.materials
         ? `<p><a href="/api/jobs/${job.id}/materials/cv" target="_blank">Download CV</a> &nbsp;·&nbsp; <a href="/api/jobs/${job.id}/materials/cover-letter" target="_blank">Download cover letter</a></p>
            <button id="regen-materials" class="secondary">Regenerate</button>
-           <button id="autofill-btn" class="secondary">Attempt assisted auto-fill (beta)</button>`
+           <button id="autofill-btn" class="secondary">Attempt assisted auto-fill (beta)</button>
+           ${
+             job.materials.tailoringSummary
+               ? `<div class="tailoring-summary"><div class="rating-label">✏️ How your CV was tailored for this role</div><p>${esc(job.materials.tailoringSummary)}</p></div>`
+               : ""
+           }`
         : `<p class="hint">No materials generated yet.</p><button id="gen-materials">Generate CV &amp; cover letter</button>`
     }
     <div id="detail-msg" class="hint"></div>

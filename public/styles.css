@@ -132,6 +132,9 @@ details.advanced-settings[open] summary { margin-bottom: 16px; }
 .rating-value { font-size: 22px; font-weight: 700; color: var(--navy); margin: 2px 0 4px; }
 .rating-block .reasons { margin: 4px 0 0; }
 
+.tailoring-summary { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-top: 12px; }
+.tailoring-summary p { margin: 4px 0 0; font-size: 13px; color: #374151; }
+
 .feedback-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
 .fb-btn { background: none; border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; font-size: 15px; line-height: 1.4; cursor: pointer; }
 .fb-btn:hover { background: var(--bg); }

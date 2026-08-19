@@ -10,15 +10,25 @@ const VALID_STATUSES = [
 ];
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+// The base64 document bytes are large and never needed outside the dedicated
+// /materials download endpoints below — every other response strips down to
+// this metadata, which now includes the plain-English tailoring summary
+// (text, cheap to include everywhere it's relevant).
+function publicMaterials(materials) {
+  if (!materials) return null;
+  return {
+    generatedAt: materials.generatedAt,
+    cvFilename: materials.cvFilename,
+    coverLetterFilename: materials.coverLetterFilename,
+    tailoringSummary: materials.tailoringSummary || null,
+  };
+}
+
 router.get("/", async (req, res) => {
   const { jobs } = await db.read();
   const { status } = req.query;
   const filtered = status ? jobs.filter((j) => j.status === status) : jobs;
-  // Materials bytes are large and never needed for a list view — strip before sending.
-  const stripped = filtered.map(({ materials, ...rest }) => ({
-    ...rest,
-    materials: materials ? { generatedAt: materials.generatedAt, cvFilename: materials.cvFilename, coverLetterFilename: materials.coverLetterFilename } : null,
-  }));
+  const stripped = filtered.map(({ materials, ...rest }) => ({ ...rest, materials: publicMaterials(materials) }));
   res.json(stripped.sort((a, b) => new Date(b.discoveredAt) - new Date(a.discoveredAt)));
 });
 
@@ -26,13 +36,8 @@ router.get("/:id", async (req, res) => {
   const { jobs } = await db.read();
   const job = jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "not found" });
-  // Strip the base64 document bytes from the detail response too — the UI
-  // downloads them via the dedicated /materials endpoints below instead.
   const { materials, ...rest } = job;
-  res.json({
-    ...rest,
-    materials: materials ? { generatedAt: materials.generatedAt, cvFilename: materials.cvFilename, coverLetterFilename: materials.coverLetterFilename } : null,
-  });
+  res.json({ ...rest, materials: publicMaterials(materials) });
 });
 
 router.post("/discover", async (req, res) => {
@@ -66,7 +71,7 @@ router.post("/:id/status", async (req, res) => {
   if (note && !status) job.notes = note;
   await db.write(data);
   const { materials, ...rest } = job;
-  res.json({ ...rest, materials: materials ? { generatedAt: materials.generatedAt, cvFilename: materials.cvFilename, coverLetterFilename: materials.coverLetterFilename } : null });
+  res.json({ ...rest, materials: publicMaterials(materials) });
 });
 
 // Thumbs up/down + optional note on a suggested job. Stored per-job and fed
@@ -112,7 +117,7 @@ router.post("/:id/generate-materials", async (req, res) => {
   job.statusHistory.push({ status: "materials_ready", at: new Date().toISOString() });
   await db.write(data);
   const { materials, ...rest } = job;
-  res.json({ ...rest, materials: { generatedAt: materials.generatedAt, cvFilename: materials.cvFilename, coverLetterFilename: materials.coverLetterFilename } });
+  res.json({ ...rest, materials: publicMaterials(materials) });
 });
 
 function sendDocx(res, base64, filename) {
