@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 const db = require("./../db");
 const { runDiscoveryCycle } = require("./../discovery");
@@ -38,6 +39,57 @@ router.get("/:id", async (req, res) => {
   if (!job) return res.status(404).json({ error: "not found" });
   const { materials, ...rest } = job;
   res.json({ ...rest, materials: publicMaterials(materials) });
+});
+
+// Manually add a job found outside the automated sources (e.g. one you
+// found yourself on a board this app doesn't search, or an application you
+// already had in flight before you started using it). No scoring runs on
+// these — there's no criteria profile to score against a job you added by
+// hand — so score/candidateFitScore/roleAppealScore stay null and the UI
+// shows "–/10" rather than a fabricated number.
+router.post("/", async (req, res) => {
+  const { title, company, location, url, status, notes, salary, description, source } = req.body || {};
+  if (!title || !company) {
+    return res.status(400).json({ error: "title and company are required" });
+  }
+  if (status && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `invalid status, must be one of: ${VALID_STATUSES.join(", ")}` });
+  }
+  const data = await db.read();
+  const now = new Date().toISOString();
+  const initialStatus = status || "reviewing";
+  const record = {
+    id: crypto.randomUUID(),
+    title,
+    company,
+    location: location || "",
+    remote: false,
+    salary: salary || "",
+    description: description || "",
+    url: url || "",
+    source: source || "manual",
+    sourceId: crypto.randomUUID(),
+    matchedCriteriaId: null,
+    matchedCriteriaName: null,
+    score: null,
+    candidateFitScore: null,
+    roleAppealScore: null,
+    scoreReasons: [],
+    reasonsByCategory: { candidateFit: [], roleAppeal: [] },
+    discoveredAt: now,
+    status: initialStatus,
+    statusHistory: [{ status: initialStatus, at: now, note: "Added manually" }],
+    notes: notes || "",
+    feedback: null,
+    materials: null,
+    appliedAt: ["submitted", "interviewing", "offer", "rejected", "withdrawn"].includes(initialStatus) ? now : null,
+    outcomeAt: null,
+    outcome: null,
+  };
+  data.jobs.push(record);
+  await db.write(data);
+  const { materials, ...rest } = record;
+  res.status(201).json({ ...rest, materials: publicMaterials(materials) });
 });
 
 router.post("/discover", async (req, res) => {
