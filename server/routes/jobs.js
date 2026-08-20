@@ -77,7 +77,7 @@ router.post("/", async (req, res) => {
   let resolvedDescription = description || "";
   if (!resolvedUrl) {
     const found = await resolvePostingForJob({ title, company }, data.settings);
-    if (found) {
+    if (found.found) {
       resolvedUrl = found.url;
       if (!resolvedDescription) resolvedDescription = found.description;
     }
@@ -194,7 +194,19 @@ router.post("/:id/find-posting", async (req, res) => {
   if (job.url) return res.json({ found: false, reason: "Job already has a posting URL." });
 
   const found = await resolvePostingForJob({ title: job.title, company: job.company }, data.settings);
-  if (!found) return res.json({ found: false });
+  if (!found.found) {
+    // Human-readable so both the single-job "find posting" button and the
+    // Tracker's bulk "Find missing postings" summary can show WHY, instead
+    // of every miss looking the same as every other miss.
+    const REASON_TEXT = {
+      no_title_or_company: "Missing a title or company to search for.",
+      no_ai_provider_configured:
+        "Not on Greenhouse/Lever/Ashby/Recruitee — add an Anthropic or Gemini API key in Settings to also try an AI web search.",
+      ai_capped_this_run: "Not on Greenhouse/Lever/Ashby/Recruitee — AI web search was skipped this run (cost cap reached).",
+      ai_tried_no_confident_match: "Not on Greenhouse/Lever/Ashby/Recruitee, and the AI web search didn't find a confident match either.",
+    };
+    return res.json({ found: false, reasonCode: found.reason, reason: REASON_TEXT[found.reason] || "Couldn't find it automatically." });
+  }
 
   job.url = found.url;
   if (!job.description) job.description = found.description;

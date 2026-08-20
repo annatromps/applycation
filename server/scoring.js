@@ -25,12 +25,30 @@ function anyHit(list, haystack) {
 //                   seniority, role type, language/visa requirements)?
 //   roleAppeal    — is this a good opportunity FOR ME (location/remote,
 //                   salary, sectors, technologies, company, priorities)?
-// Each starts at 25 (half the old single-score baseline of 50) and is
-// clamped to 0-100 independently, so the overall "score" (their average,
-// see bottom of this function) behaves like the old single score did.
+// Each starts at a baseline and is clamped to 0-100 independently, so the
+// overall "score" (their average, see bottom of this function) reflects how
+// many real signals actually fired rather than starting near-neutral.
+//
+// Baseline + bonus sizes were recalibrated 2026-08-20 after live data showed
+// two problems at once: (1) a genuinely good match — title keyword hit +
+// remote-friendly, with none of the optional soft-fit fields (sectors/tech/
+// company size/followed companies) filled in, the common case for a profile
+// that's mostly a title/location search — was only reaching ~45, short of
+// the 55 default "minimum score to surface"; and (2) a job with the WRONG
+// title but still remote could independently reach ~30 purely off
+// roleAppeal, not clearly reading as "irrelevant". Old weights: baseline 25,
+// title-match +25, title-mismatch -20, remote +15 → a matching job averaged
+// (25+25 + 25+15)/2 = 45; a wrong-title-but-remote job averaged
+// (25-20 + 25+15)/2 = 30 — too close together. New weights: baseline 30,
+// title-match +35, title-mismatch -35, remote +15 → a matching job now
+// averages (30+35 + 30+15)/2 = 55 (right at the default threshold, with any
+// extra signal — location, sector, tech, a followed company — pushing it
+// further above), while a wrong-title-but-remote job averages
+// (0 [30-35, clamped] + 30+15)/2 = 22.5 — clearly separated from a genuine
+// match instead of both landing in the same mediocre middle.
 function scoreJob(job, criteria) {
-  const cf = { score: 25, reasons: [] }; // candidateFit
-  const ra = { score: 25, reasons: [] }; // roleAppeal
+  const cf = { score: 30, reasons: [] }; // candidateFit
+  const ra = { score: 30, reasons: [] }; // roleAppeal
   const title = job.title || "";
   const desc = job.description || "";
   const combined = `${title} ${desc}`;
@@ -59,13 +77,19 @@ function scoreJob(job, criteria) {
   // kind of candidate this role is looking for?
   const titleHits = anyHit(criteria.titleKeywords, title);
   if (titleHits.length) {
-    bump(cf, 25, `Title matches: ${titleHits.join(", ")}`);
+    bump(cf, 35, `Title matches: ${titleHits.join(", ")}`);
   } else {
     const descHits = anyHit(criteria.titleKeywords, desc);
     if (descHits.length) {
       bump(cf, 10, `Role keywords found in description: ${descHits.join(", ")}`);
     } else if ((criteria.titleKeywords || []).length) {
-      bump(cf, -20, "No target title/role keywords found");
+      // Steeper than the old -20: a title that isn't even close to what
+      // you're looking for should tank candidateFit toward the floor, not
+      // just dent it — otherwise a purely appealing-but-wrong-role job (e.g.
+      // remote + a favourite technology) can still average out to a
+      // deceptively middling overall score. See the recalibration note
+      // above scoreJob() for the worked example.
+      bump(cf, -35, "No target title/role keywords found");
     }
   }
 

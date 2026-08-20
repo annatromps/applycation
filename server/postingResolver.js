@@ -27,6 +27,7 @@
 
 const { findPosting } = require("./atsLookup");
 const { findPostingViaAIWebSearch } = require("./aiPostingSearch");
+const { isPostingSearchConfigured } = require("./ai/client");
 
 /**
  * @param {{title: string, company: string}} job
@@ -34,25 +35,33 @@ const { findPostingViaAIWebSearch } = require("./aiPostingSearch");
  * @param {{allowAiWebSearch?: boolean}} [options] - set allowAiWebSearch:
  *   false to skip tier 2 even if AI is configured (used by the startup
  *   backfill to enforce its per-cycle cost cap across many jobs at once).
- * @returns {Promise<{url: string, description: string, resolvedVia: "greenhouse"|"lever"|"ashby"|"recruitee"|"ai-web-search"}|null>}
+ * @returns {Promise<{found: true, url: string, description: string, resolvedVia: "greenhouse"|"lever"|"ashby"|"recruitee"|"ai-web-search"} | {found: false, reason: "no_title_or_company"|"no_ai_provider_configured"|"ai_capped_this_run"|"ai_tried_no_confident_match"}>}
+ *   Always returns an object now (never bare null) so callers — especially
+ *   the "Find missing postings" bulk button — can explain WHY a job stayed
+ *   unresolved instead of just reporting a raw count. See each reason's
+ *   name for what it means; the AI-specific reasons only ever occur when
+ *   tier 1 (the free ATS lookup) already came up empty first.
  */
 async function resolvePostingForJob(job, settings, { allowAiWebSearch = true } = {}) {
-  if (!job || !job.title || !job.company) return null;
+  if (!job || !job.title || !job.company) return { found: false, reason: "no_title_or_company" };
 
   try {
     const viaAts = await findPosting(job.company, job.title);
-    if (viaAts) return viaAts;
+    if (viaAts) return { found: true, ...viaAts };
   } catch (e) {
     console.error(`[postingResolver] ATS lookup failed for "${job.title}" @ "${job.company}":`, e.message);
   }
 
-  if (!allowAiWebSearch) return null;
+  if (!allowAiWebSearch) return { found: false, reason: "ai_capped_this_run" };
+  if (!isPostingSearchConfigured(settings)) return { found: false, reason: "no_ai_provider_configured" };
 
   try {
-    return await findPostingViaAIWebSearch(job, settings);
+    const viaAi = await findPostingViaAIWebSearch(job, settings);
+    if (viaAi) return { found: true, ...viaAi };
+    return { found: false, reason: "ai_tried_no_confident_match" };
   } catch (e) {
     console.error(`[postingResolver] AI web-search lookup failed for "${job.title}" @ "${job.company}":`, e.message);
-    return null;
+    return { found: false, reason: "ai_tried_no_confident_match" };
   }
 }
 

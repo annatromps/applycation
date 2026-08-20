@@ -172,6 +172,66 @@ function closeModal() {
   modalRoot.innerHTML = "";
 }
 
+// Navigates the SPA to `hash`, then scrolls to and focuses `fieldId` once
+// that page's async render has actually put it in the DOM — polls briefly
+// rather than assuming a fixed delay, since renderSettings()/renderMe() both
+// fetch before rendering. Opens a collapsed <details> (e.g. "Advanced
+// settings") first if the field lives inside one, since scrollIntoView on a
+// closed <details> child doesn't reveal it.
+function navigateAndFocusField(hash, fieldId, { detailsId } = {}) {
+  closeModal();
+  location.hash = hash;
+  let attempts = 0;
+  const tryFocus = () => {
+    attempts++;
+    const field = document.getElementById(fieldId);
+    if (field) {
+      if (detailsId) {
+        const details = document.getElementById(detailsId);
+        if (details) details.open = true;
+      }
+      field.scrollIntoView({ behavior: "smooth", block: "center" });
+      field.focus();
+      return;
+    }
+    if (attempts < 40) setTimeout(tryFocus, 100);
+  };
+  setTimeout(tryFocus, 50);
+}
+
+// Dealbreakers live inside a specific criteria profile's own Edit modal, not
+// on a fixed page/field — so this navigates to Me, opens the first profile's
+// editor (that fetch is itself async, hence the same poll-until-clicked
+// pattern), then scrolls to and focuses its dealbreakers field. If you have
+// more than one profile this always opens the first — fine for the common
+// single-profile case; with several, it's a starting point rather than a
+// guaranteed match for which profile actually filtered a given job.
+function navigateAndOpenCriteriaField(fieldId) {
+  closeModal();
+  location.hash = "#/me";
+  let attempts = 0;
+  let clicked = false;
+  const tryStep = () => {
+    attempts++;
+    if (!clicked) {
+      const editBtn = document.querySelector("[data-edit-criteria]");
+      if (editBtn) {
+        clicked = true;
+        editBtn.click();
+      }
+    } else {
+      const field = document.getElementById(fieldId);
+      if (field) {
+        field.scrollIntoView({ behavior: "smooth", block: "center" });
+        field.focus();
+        return;
+      }
+    }
+    if (attempts < 60) setTimeout(tryStep, 100);
+  };
+  setTimeout(tryStep, 50);
+}
+
 function openModal(html, extraClass = "") {
   modalRoot.innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><div class="modal ${extraClass}">${html}</div></div>`;
   document.getElementById("modal-backdrop").addEventListener("click", (e) => {
@@ -337,8 +397,22 @@ async function renderDashboard() {
         // searched anywhere — show what really happened this run instead.
         openModal(discoveryZeroResultsHtml(result.diagnostics));
         document.getElementById("close-modal").addEventListener("click", closeModal);
-        const gotoLink = document.getElementById("goto-criteria-setup");
-        if (gotoLink) gotoLink.addEventListener("click", closeModal);
+        const gotoCriteria = document.getElementById("goto-criteria-setup");
+        if (gotoCriteria) gotoCriteria.addEventListener("click", closeModal);
+        const gotoDealbreakers = document.getElementById("goto-dealbreakers");
+        if (gotoDealbreakers) {
+          gotoDealbreakers.addEventListener("click", (e) => {
+            e.preventDefault();
+            navigateAndOpenCriteriaField("c-dealbreakers");
+          });
+        }
+        const gotoMinScore = document.getElementById("goto-min-score");
+        if (gotoMinScore) {
+          gotoMinScore.addEventListener("click", (e) => {
+            e.preventDefault();
+            navigateAndFocusField("#/settings", "minScore", { detailsId: "advanced-settings" });
+          });
+        }
       }
       renderDashboard();
     } catch (err) {
@@ -384,10 +458,40 @@ function discoveryZeroResultsHtml(diag) {
       <li>Job board sources checked (raw results before filtering) — ${sourceLines}</li>
       <li>Email digest: ${diag.emailDigestJobsFound} job listing(s) extracted from new emails</li>
       <li>${diag.newAfterDedup} of those weren't already-known jobs</li>
-      <li>${diag.hardFailed} ruled out by a dealbreaker in your criteria profile</li>
-      <li>${diag.belowThreshold} scored below your match threshold</li>
+      <li>${diag.hardFailed} ruled out by a <a href="#" id="goto-dealbreakers">dealbreaker in your criteria profile</a></li>
+      <li>${diag.belowThreshold} scored below your <a href="#" id="goto-min-score">match threshold</a></li>
     </ul>
-    <p class="hint">If every source above shows 0, that usually means the request itself failed (network/API issue) rather than genuinely finding nothing — check the Railway logs for a matching <code>[sources]</code> or fetch-failed error line. If sources found candidates but they're all getting filtered out, a dealbreaker or the match threshold on your <a href="#/me">criteria profile</a> might be stricter than intended.</p>
+    <p class="hint">If every source above shows 0, that usually means the request itself failed (network/API issue) rather than genuinely finding nothing — check the Railway logs for a matching <code>[sources]</code> or fetch-failed error line. Otherwise, click either link above to jump straight to where it's set and adjust it.</p>
+  `;
+}
+
+// Aggregate reasonCounts (from server/postingResolver.js's `reason` codes,
+// tallied client-side in the "Find missing postings" handler) into a
+// breakdown of WHY the still-missing jobs stayed missing, instead of just a
+// found/total count. Mirrors discoveryZeroResultsHtml's approach.
+function findMissingPostingsSummaryHtml(found, total, reasonCounts) {
+  const LABELS = {
+    no_ai_provider_configured: "Not on Greenhouse/Lever/Ashby/Recruitee, and no AI provider is set up to try a web search instead",
+    ai_capped_this_run: "Not on those four platforms — AI web search was skipped (this run's cost cap was reached)",
+    ai_tried_no_confident_match: "Not on those four platforms, and an AI web search didn't find a confident match either",
+    no_title_or_company: "Missing a title or company to search for",
+    request_failed: "The request itself failed (network/API issue) — worth retrying",
+    other: "Couldn't find it automatically",
+  };
+  const rows = Object.entries(reasonCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([code, count]) => `<li>${count} — ${esc(LABELS[code] || code)}</li>`)
+    .join("");
+  const noAiConfigured = Boolean(reasonCounts.no_ai_provider_configured);
+  return `
+    <span class="close-x" id="close-modal">&times;</span>
+    <h3>Found ${found} of ${total}</h3>
+    <ul>${rows}</ul>
+    <p class="hint">${
+      noAiConfigured
+        ? `<a href="#" id="goto-ai-setup">Add an Anthropic or Gemini API key</a> in Settings to let a web search try the ones tier 1 can't reach — `
+        : ""
+    }open a job and paste the link in yourself under Posting details for anything that still can't be found automatically.</p>
   `;
 }
 
@@ -450,24 +554,14 @@ function attachTrackerRowActionHandlers(jobs, onChange) {
 }
 
 // ---------- Review Queue ----------
-async function renderReview() {
-  main.innerHTML = `<h2>Review Queue</h2><div id="review-body">Loading…</div>`;
-  const jobs = await api("/jobs?status=discovered");
-  const body = document.getElementById("review-body");
-  if (!jobs.length) {
-    body.innerHTML = `<div class="empty">No new matches waiting for review.</div>`;
-    return;
-  }
-  body.innerHTML = jobs
-    .sort((a, b) => b.score - a.score)
-    .map(
-      (j) => `
+function reviewJobRowHtml(j) {
+  return `
     <div class="list-item job-row">
       ${companyLogoHtml(j.company, 44)}
       <div class="job-row-main">
         <h4>${esc(j.company)} <span class="score ${scoreClass(j.score)}">Score ${j.score}/100</span></h4>
         <div class="meta">${esc(j.title)} · ${esc(j.location || "—")} · via ${esc(j.source)} · discovered ${fmtDate(j.discoveredAt)}
-          ${j.url ? `&nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
+          ${j.url ? `&nbsp;<a class="posting-link-btn" href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
         </div>
         ${ratingsDetailHtml(j)}
         ${feedbackRowHtml(j)}
@@ -477,42 +571,105 @@ async function renderReview() {
         <button class="secondary" data-dismiss="${j.id}">Dismiss</button>
       </div>
     </div>
-  `
-    )
-    .join("");
+  `;
+}
 
-  attachFeedbackHandlers(body, Object.fromEntries(jobs.map((j) => [j.id, j])), renderReview);
+const REVIEW_SORTS = {
+  "score-desc": (a, b) => (b.score ?? 0) - (a.score ?? 0),
+  "score-asc": (a, b) => (a.score ?? 0) - (b.score ?? 0),
+  "date-desc": (a, b) => new Date(b.discoveredAt) - new Date(a.discoveredAt),
+  "date-asc": (a, b) => new Date(a.discoveredAt) - new Date(b.discoveredAt),
+};
 
-  body.querySelectorAll("[data-approve]").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.approve;
-      const job = jobs.find((j) => j.id === id);
-      const alreadyHasMaterials = Boolean(job && job.materials);
-      btn.disabled = true;
-      btn.textContent = alreadyHasMaterials ? "Approving…" : "Preparing…";
-      try {
-        if (alreadyHasMaterials) {
-          // Materials were already auto-generated at discovery time — just move the status forward.
-          await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "materials_ready" }) });
-        } else {
-          await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "approved" }) });
-          await api(`/jobs/${id}/generate-materials`, { method: "POST" });
+async function renderReview() {
+  main.innerHTML = `<h2>Review Queue</h2><div id="review-body">Loading…</div>`;
+  const jobs = await api("/jobs?status=discovered");
+  const body = document.getElementById("review-body");
+  if (!jobs.length) {
+    body.innerHTML = `<div class="empty">No new matches waiting for review.</div>`;
+    return;
+  }
+
+  const jobsById = Object.fromEntries(jobs.map((j) => [j.id, j]));
+  const sources = [...new Set(jobs.map((j) => j.source).filter(Boolean))].sort();
+
+  body.innerHTML = `
+    <div class="filters" style="justify-content:space-between;">
+      <div class="filters" style="margin:0;">
+        <label style="margin:0;">Sort:</label>
+        <select id="review-sort">
+          <option value="score-desc">Score, high to low</option>
+          <option value="score-asc">Score, low to high</option>
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+        </select>
+      </div>
+      <div class="filters" style="margin:0;">
+        <label style="margin:0;">Min score:</label>
+        <input type="number" id="review-min-score" min="0" max="100" placeholder="0" style="width:70px;" />
+        <label style="margin:0;">Source:</label>
+        <select id="review-source-filter">
+          <option value="">All</option>
+          ${sources.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div id="review-list"></div>
+  `;
+  const listEl = document.getElementById("review-list");
+
+  const draw = () => {
+    const sortKey = document.getElementById("review-sort").value;
+    const minScore = Number(document.getElementById("review-min-score").value) || 0;
+    const source = document.getElementById("review-source-filter").value;
+    const list = jobs
+      .filter((j) => (j.score ?? 0) >= minScore && (!source || j.source === source))
+      .sort(REVIEW_SORTS[sortKey] || REVIEW_SORTS["score-desc"]);
+
+    if (!list.length) {
+      listEl.innerHTML = `<div class="empty">No jobs match these filters.</div>`;
+      return;
+    }
+    listEl.innerHTML = list.map(reviewJobRowHtml).join("");
+
+    attachFeedbackHandlers(listEl, jobsById, renderReview);
+
+    listEl.querySelectorAll("[data-approve]").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.approve;
+        const job = jobsById[id];
+        const alreadyHasMaterials = Boolean(job && job.materials);
+        btn.disabled = true;
+        btn.textContent = alreadyHasMaterials ? "Approving…" : "Preparing…";
+        try {
+          if (alreadyHasMaterials) {
+            // Materials were already auto-generated at discovery time — just move the status forward.
+            await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "materials_ready" }) });
+          } else {
+            await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "approved" }) });
+            await api(`/jobs/${id}/generate-materials`, { method: "POST" });
+          }
+          renderReview();
+        } catch (err) {
+          alert(`Couldn't prepare materials: ${err.message}`);
+          btn.disabled = false;
+          btn.textContent = alreadyHasMaterials ? "Approve" : "Approve & prepare materials";
         }
+      })
+    );
+    listEl.querySelectorAll("[data-dismiss]").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        await api(`/jobs/${btn.dataset.dismiss}/status`, { method: "POST", body: JSON.stringify({ status: "dismissed" }) });
         renderReview();
-      } catch (err) {
-        alert(`Couldn't prepare materials: ${err.message}`);
-        btn.disabled = false;
-        btn.textContent = alreadyHasMaterials ? "Approve" : "Approve & prepare materials";
-      }
-    })
-  );
-  body.querySelectorAll("[data-dismiss]").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await api(`/jobs/${btn.dataset.dismiss}/status`, { method: "POST", body: JSON.stringify({ status: "dismissed" }) });
-      renderReview();
-    })
-  );
-  body.querySelectorAll("[data-detail]").forEach((btn) => btn.addEventListener("click", () => openJobDetail(btn.dataset.detail)));
+      })
+    );
+    listEl.querySelectorAll("[data-detail]").forEach((btn) => btn.addEventListener("click", () => openJobDetail(btn.dataset.detail)));
+  };
+
+  document.getElementById("review-sort").addEventListener("change", draw);
+  document.getElementById("review-min-score").addEventListener("input", draw);
+  document.getElementById("review-source-filter").addEventListener("change", draw);
+  draw();
 }
 
 // ---------- Tracker ----------
@@ -617,22 +774,32 @@ async function renderTracker(initialFilter) {
   // configured)" — no point being vague when we know the real answer.
   document.getElementById("find-missing-postings").addEventListener("click", async (e) => {
     const btn = e.target;
-    const [allJobs, settings] = await Promise.all([api("/jobs"), api("/settings")]);
+    const allJobs = await api("/jobs");
     const missing = allJobs.filter((j) => !j.url && j.status !== "dismissed");
     if (!missing.length) {
       alert("Every job in your Tracker already has a posting link.");
       return;
     }
-    const aiWebSearchOn = (settings.aiProvider === "anthropic" || settings.aiProvider === "gemini") && Boolean(settings.aiApiKey);
     btn.disabled = true;
     let found = 0;
+    // Tallied by the reason code the backend actually gave for each miss
+    // (server/postingResolver.js) — turns "found 2 of 10" into an
+    // explanation of what happened to the other 8, instead of leaving every
+    // miss looking the same.
+    const reasonCounts = {};
     for (let i = 0; i < missing.length; i++) {
       btn.textContent = `Looking… (${i + 1}/${missing.length})`;
       try {
         const result = await api(`/jobs/${missing[i].id}/find-posting`, { method: "POST" });
-        if (result.found) found++;
+        if (result.found) {
+          found++;
+        } else {
+          const key = result.reasonCode || "other";
+          reasonCounts[key] = (reasonCounts[key] || 0) + 1;
+        }
       } catch (err) {
         console.error(`Find-posting failed for ${missing[i].title} @ ${missing[i].company}:`, err.message);
+        reasonCounts.request_failed = (reasonCounts.request_failed || 0) + 1;
       }
     }
     btn.disabled = false;
@@ -640,18 +807,16 @@ async function renderTracker(initialFilter) {
     load();
     if (found === missing.length) {
       alert(`Found all ${found} missing posting${found === 1 ? "" : "s"}.`);
-    } else if (aiWebSearchOn) {
-      alert(
-        `Found ${found} of ${missing.length} missing posting${missing.length === 1 ? "" : "s"} — checked the free ATS lookup and an AI web search for each. The rest genuinely couldn't be found either way; open each job and paste the link in yourself under Posting details.`
-      );
-    } else {
-      openModal(`
-        <span class="close-x" id="close-modal">&times;</span>
-        <h3>Found ${found} of ${missing.length}</h3>
-        <p>The rest aren't on Greenhouse, Lever, Ashby, or Recruitee — and AI web search isn't set up, so that fallback wasn't tried. <a href="#/settings" id="goto-ai-setup">Add an Anthropic or Gemini API key</a> under Settings → Advanced to let it search the web for these automatically next time, or open each job now and paste the link in yourself under Posting details.</p>
-      `);
-      document.getElementById("close-modal").addEventListener("click", closeModal);
-      document.getElementById("goto-ai-setup").addEventListener("click", closeModal);
+      return;
+    }
+    openModal(findMissingPostingsSummaryHtml(found, missing.length, reasonCounts));
+    document.getElementById("close-modal").addEventListener("click", closeModal);
+    const gotoAiSetup = document.getElementById("goto-ai-setup");
+    if (gotoAiSetup) {
+      gotoAiSetup.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        navigateAndFocusField("#/settings", "aiProvider", { detailsId: "advanced-settings" });
+      });
     }
   });
 
@@ -721,15 +886,19 @@ async function openJobDetail(id) {
   const job = await api(`/jobs/${id}`);
   const statuses = ["discovered","reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"];
   openModal(`
-    <span class="close-x" id="close-modal">&times;</span>
-    <div class="job-detail-header">
+    <div class="job-detail-header sticky">
+      <span class="close-x" id="close-modal">&times;</span>
       ${companyLogoHtml(job.company, 48)}
       <div>
         <h3>${esc(job.company)}</h3>
-        <div class="meta">${esc(job.title)} · ${esc(job.location || "—")}${job.url ? ` · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}</div>
+        <div class="meta">${esc(job.title)} · ${esc(job.location || "—")}${job.salary ? ` · ${esc(job.salary)}` : ""}${job.url ? ` · <a class="posting-link-btn" href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}</div>
+        <div class="meta job-detail-quickfacts">
+          <span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span>
+          ${job.score != null ? `<span class="score ${scoreClass(job.score)}">Overall score ${job.score}/100</span>` : ""}
+          ${job.source ? `<span class="hint">via ${esc(job.source)}${job.discoveredAt ? ` · discovered ${fmtDate(job.discoveredAt)}` : ""}</span>` : ""}
+        </div>
       </div>
     </div>
-    <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> ${job.score != null ? `&nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}/100</span>` : ""}</p>
     ${ratingsDetailHtml(job)}
     ${job.materials && job.materials.reviewQuestions && job.materials.reviewQuestions.length ? reviewQuestionsHtml(job.materials.reviewQuestions) : ""}
     ${reviewAnswerBoxHtml(job)}
@@ -765,6 +934,7 @@ async function openJobDetail(id) {
     </div>
     <button id="save-posting-details" class="secondary">Save posting details</button>
     <span id="posting-details-msg" class="hint"></span>
+    <p class="hint">Saves whatever's in the four fields above, and — if you changed the URL, description, location, or salary — immediately re-scores this job against your criteria using the new information (see the "Always automatic, no rescore button" behaviour throughout this app). Editing notes/status/favourite elsewhere never triggers a rescore; only these posting fields do, since they're what scoring actually reads.</p>
 
     <div class="section-title">Application materials</div>
     ${
@@ -810,7 +980,7 @@ async function openJobDetail(id) {
           openJobDetail(job.id);
         } else {
           document.getElementById("posting-details-msg").textContent =
-            "Couldn't find it automatically — paste the link yourself below if you have it.";
+            (result.reason || "Couldn't find it automatically.") + " Paste the link yourself below if you have it.";
           findPostingBtn.disabled = false;
           findPostingBtn.textContent = "Try to find the real posting automatically";
         }
@@ -987,6 +1157,7 @@ async function renderSettings() {
 
       <label>Minimum score to surface a match (0-100)</label>
       <input type="number" id="minScore" min="0" max="100" value="${settings.minScoreToSurface}" />
+      <p class="hint">This is the overall score — the average of "You're a match" and "You'll like this" (each rated 0-100 internally, shown as X/10 elsewhere) — a job needs to actually get added when discovered; anything below is found but silently skipped. Each rating starts at a baseline of 30 and gains or loses points for real signals: a title/role keyword match is worth +35 (a clear mismatch is -35, so the wrong role drops fast), remote-friendly (if you're OK with remote) is +15, a location match is +15, plus smaller bonuses for sector/technology/company-size/priority matches and a big +20 for a followed company — so a job that's clearly the right title and workable location alone lands right around 55, with any additional fit signal pushing it higher, while a wrong-title job stays well below even if it's otherwise appealing (e.g. remote). A dealbreaker match zeroes both ratings outright regardless of anything else. If you're seeing too few matches, the fastest lever is lowering this number; the more precise fix is filling in more of the optional fields on your <a href="#/me">criteria profile</a> (favourite technologies, industries, followed companies) so genuinely good matches accumulate more bonus points instead of relying on title+remote alone.</p>
 
       <div class="form-row">
         <div>

@@ -54,7 +54,7 @@ async function backfillMissingScores() {
         data.settings,
         { allowAiWebSearch: aiPostingSearchesUsed < maxAiPostingSearches }
       );
-      if (found) {
+      if (found.found) {
         job.url = found.url;
         if (!job.description) job.description = found.description;
         changed = true;
