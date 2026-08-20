@@ -22,6 +22,23 @@ async function runDiscoveryCycle() {
   const existingKeys = new Set(data.jobs.map((j) => `${j.source}:${j.sourceId}`));
   const newlyAdded = [];
   const maxAiPerCycle = data.settings.maxAiScoredPerCycle ?? 15;
+
+  // Surfaced back to the caller (see routes/jobs.js's /discover and
+  // scheduler.js) so "0 new matches" doesn't read as a black box — with no
+  // active criteria profile, this loop below never even runs, so nothing
+  // gets fetched from anywhere (job boards OR email digest jobs), which
+  // otherwise looks identical to "ran fine, just found nothing new".
+  const diagnostics = {
+    activeProfileCount: activeProfiles.length,
+    totalProfileCount: (data.criteriaProfiles || []).length,
+    sourceCounts: {}, // merged across profiles, raw counts before dedup/scoring
+    emailDigestJobsFound: 0,
+    rawCandidatesConsidered: 0, // total found (sources + email) across all profiles, before dedup against known jobs
+    newAfterDedup: 0, // of those, how many weren't already-known jobs
+    hardFailed: 0, // ruled out by a criteria dealbreaker
+    belowThreshold: 0, // scored but under minScoreToSurface
+    added: 0,
+  };
   // Built once per cycle (not per job) — your accumulated 👍/👎 feedback,
   // fed into the AI scoring pass below so matching actually improves over
   // time instead of just displaying the feedback back at you.
@@ -40,6 +57,7 @@ async function runDiscoveryCycle() {
       const priorProcessedIds = data.meta.emailDigestProcessedIds || [];
       const digestResult = await discoverFromEmailDigests(data.settings, priorProcessedIds);
       digestJobs = digestResult.jobs;
+      diagnostics.emailDigestJobsFound = digestResult.jobs.length;
       // Persisted so the next cycle knows what's already been imported —
       // dedup is by Message-ID, not by IMAP's \Seen flag (see
       // email/inbox.js's header comment for why that used to be a bug).
@@ -79,16 +97,25 @@ async function runDiscoveryCycle() {
   let materialsSkippedForCap = 0;
 
   for (const criteria of activeProfiles) {
-    const found = [...(await discoverJobs(criteria)), ...digestJobs];
+    const { jobs: sourceJobs, sourceCounts } = await discoverJobs(criteria);
+    for (const [src, count] of Object.entries(sourceCounts)) {
+      diagnostics.sourceCounts[src] = (diagnostics.sourceCounts[src] || 0) + count;
+    }
+    const found = [...sourceJobs, ...digestJobs];
+    diagnostics.rawCandidatesConsidered += found.length;
     const candidates = [];
 
     for (const job of found) {
       const key = `${job.source}:${job.sourceId}`;
       if (existingKeys.has(key)) continue; // already discovered in a prior run
       existingKeys.add(key);
+      diagnostics.newAfterDedup++;
 
       const { score, candidateFitScore, roleAppealScore, hardFail, reasons, reasonsByCategory } = scoreJob(job, criteria);
-      if (hardFail) continue; // never surface dealbreaker matches at all
+      if (hardFail) {
+        diagnostics.hardFailed++;
+        continue; // never surface dealbreaker matches at all
+      }
       candidates.push({
         job,
         ruleScore: score,
@@ -130,7 +157,10 @@ async function runDiscoveryCycle() {
       const candidateFitScore = c.finalCandidateFit ?? c.ruleCandidateFit;
       const roleAppealScore = c.finalRoleAppeal ?? c.ruleRoleAppeal;
       const finalScore = Math.round((candidateFitScore + roleAppealScore) / 2);
-      if (finalScore < (data.settings.minScoreToSurface ?? 55)) continue;
+      if (finalScore < (data.settings.minScoreToSurface ?? 55)) {
+        diagnostics.belowThreshold++;
+        continue;
+      }
 
       // Submission-ease score is independent of criteria matching (it's about
       // the posting/process itself, not fit) — computed once per surfaced job.
@@ -180,6 +210,7 @@ async function runDiscoveryCycle() {
 
       data.jobs.push(record);
       newlyAdded.push(record);
+      diagnostics.added++;
     }
   }
 
@@ -199,7 +230,7 @@ async function runDiscoveryCycle() {
     });
   }
 
-  return newlyAdded;
+  return { jobs: newlyAdded, diagnostics };
 }
 
 module.exports = { runDiscoveryCycle };

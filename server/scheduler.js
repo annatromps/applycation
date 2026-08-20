@@ -37,8 +37,8 @@ async function reschedule() {
   currentTask = cron.schedule(expr, async () => {
     console.log(`[scheduler] running discovery cycle (cron "${expr}")`);
     try {
-      const added = await runDiscoveryCycle();
-      console.log(`[scheduler] discovery cycle complete, ${added.length} new match(es)`);
+      const result = await runDiscoveryCycle();
+      console.log(`[scheduler] discovery cycle complete, ${result.jobs.length} new match(es)`, result.diagnostics);
     } catch (e) {
       console.error("[scheduler] discovery cycle failed:", e);
     }

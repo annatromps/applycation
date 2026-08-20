@@ -26,36 +26,68 @@ const REGISTRY = {
 
 /**
  * Run all sources enabled in a criteria profile's `sources` config and
- * return a flat, de-duplicated (by source+sourceId) array of normalized jobs.
+ * return a flat, de-duplicated (by source+sourceId) array of normalized jobs,
+ * plus a per-source raw count (before dedup) so a "0 results" cycle can be
+ * diagnosed — was a source actually queried, and did it come back empty?
+ * Each source module already catches its own fetch errors internally and
+ * resolves with [] rather than rejecting (so a network/API failure can't
+ * break discovery for the others), which means a 0 here can mean either
+ * "genuinely found nothing" or "the request failed" — check the Railway
+ * logs for that source's own `console.error` line to tell which.
+ * @returns {Promise<{jobs: Array, sourceCounts: Record<string, number>}>}
  */
 async function discoverJobs(criteriaProfile) {
   const cfg = criteriaProfile.sources || {};
   const searchTerms = criteriaProfile.titleKeywords || [];
   const tasks = [];
+  const labels = [];
 
-  if (cfg.remotive !== false) tasks.push(remotive.fetchJobs({ searchTerms }));
-  if (cfg.arbeitnow !== false) tasks.push(arbeitnow.fetchJobs());
-  if (cfg.remoteok !== false) tasks.push(remoteok.fetchJobs());
+  if (cfg.remotive !== false) {
+    tasks.push(remotive.fetchJobs({ searchTerms }));
+    labels.push("remotive");
+  }
+  if (cfg.arbeitnow !== false) {
+    tasks.push(arbeitnow.fetchJobs());
+    labels.push("arbeitnow");
+  }
+  if (cfg.remoteok !== false) {
+    tasks.push(remoteok.fetchJobs());
+    labels.push("remoteok");
+  }
   if (cfg.greenhouse && cfg.greenhouse.enabled && (cfg.greenhouse.companies || []).length) {
     tasks.push(greenhouse.fetchJobs({ companies: cfg.greenhouse.companies }));
+    labels.push("greenhouse");
   }
   if (cfg.lever && cfg.lever.enabled && (cfg.lever.companies || []).length) {
     tasks.push(lever.fetchJobs({ companies: cfg.lever.companies }));
+    labels.push("lever");
   }
 
   const settled = await Promise.allSettled(tasks);
   const all = [];
-  for (const s of settled) {
-    if (s.status === "fulfilled") all.push(...s.value);
-  }
+  const sourceCounts = {};
+  settled.forEach((s, i) => {
+    const label = labels[i];
+    if (s.status === "fulfilled") {
+      sourceCounts[label] = s.value.length;
+      all.push(...s.value);
+    } else {
+      // Shouldn't normally happen (each source catches its own errors), but
+      // covered defensively so an unexpected throw still shows up here
+      // rather than silently vanishing into Promise.allSettled.
+      sourceCounts[label] = 0;
+      console.error(`[sources] "${label}" fetch rejected unexpectedly:`, s.reason && s.reason.message);
+    }
+  });
 
   const seen = new Set();
-  return all.filter((j) => {
+  const jobs = all.filter((j) => {
     const key = `${j.source}:${j.sourceId}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  return { jobs, sourceCounts };
 }
 
 module.exports = { discoverJobs, REGISTRY };

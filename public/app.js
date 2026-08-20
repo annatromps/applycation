@@ -330,7 +330,16 @@ async function renderDashboard() {
     try {
       const result = await api("/jobs/discover", { method: "POST" });
       clearInterval(rotateLoadingMessage);
-      alert(`Discovery complete: ${result.added} new match(es) found.`);
+      if (result.added > 0) {
+        alert(`Discovery complete: ${result.added} new match(es) found.`);
+      } else {
+        // A bare "0 new matches" alert can't tell you whether it actually
+        // searched anywhere — show what really happened this run instead.
+        openModal(discoveryZeroResultsHtml(result.diagnostics));
+        document.getElementById("close-modal").addEventListener("click", closeModal);
+        const gotoLink = document.getElementById("goto-criteria-setup");
+        if (gotoLink) gotoLink.addEventListener("click", closeModal);
+      }
       renderDashboard();
     } catch (err) {
       clearInterval(rotateLoadingMessage);
@@ -340,6 +349,46 @@ async function renderDashboard() {
     }
   });
   attachRowHandlers();
+}
+
+// Explains a 0-new-matches discovery cycle instead of leaving it looking
+// like nothing happened — see server/discovery.js's `diagnostics` for what
+// each field means. The single most common cause (no active criteria
+// profile, so the whole per-source/email-scoring loop never even runs) gets
+// its own direct call-out with a link straight to where it's fixed.
+function discoveryZeroResultsHtml(diag) {
+  if (!diag) {
+    return `<span class="close-x" id="close-modal">&times;</span><h3>Discovery complete</h3><p>0 new matches found.</p>`;
+  }
+  if (diag.activeProfileCount === 0) {
+    return `
+      <span class="close-x" id="close-modal">&times;</span>
+      <h3>Discovery complete: 0 new matches</h3>
+      <p><strong>No active criteria profile is set up</strong> — with none, this doesn't search job boards or check your email digest at all, since there's nothing to score jobs against. ${
+        diag.totalProfileCount
+          ? `You have ${diag.totalProfileCount} profile${diag.totalProfileCount === 1 ? "" : "s"} saved, but none are marked active.`
+          : "You haven't created one yet."
+      }</p>
+      <p><a href="#/me" id="goto-criteria-setup">Set up a criteria profile on the Me tab</a> — that's what actually turns discovery on.</p>
+    `;
+  }
+  const sourceLines =
+    Object.entries(diag.sourceCounts || {})
+      .map(([src, count]) => `${esc(src)}: ${count}`)
+      .join(", ") || "none enabled";
+  return `
+    <span class="close-x" id="close-modal">&times;</span>
+    <h3>Discovery complete: 0 new matches</h3>
+    <p>Here's what actually ran this cycle, so "0" doesn't look like nothing happened:</p>
+    <ul>
+      <li>Job board sources checked (raw results before filtering) — ${sourceLines}</li>
+      <li>Email digest: ${diag.emailDigestJobsFound} job listing(s) extracted from new emails</li>
+      <li>${diag.newAfterDedup} of those weren't already-known jobs</li>
+      <li>${diag.hardFailed} ruled out by a dealbreaker in your criteria profile</li>
+      <li>${diag.belowThreshold} scored below your match threshold</li>
+    </ul>
+    <p class="hint">If every source above shows 0, that usually means the request itself failed (network/API issue) rather than genuinely finding nothing — check the Railway logs for a matching <code>[sources]</code> or fetch-failed error line. If sources found candidates but they're all getting filtered out, a dealbreaker or the match threshold on your <a href="#/me">criteria profile</a> might be stricter than intended.</p>
+  `;
 }
 
 function jobRowHtml(j) {

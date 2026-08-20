@@ -217,8 +217,10 @@ router.post("/:id/find-posting", async (req, res) => {
 
 router.post("/discover", async (req, res) => {
   try {
-    const added = await runDiscoveryCycle();
-    res.json({ added: added.length, jobs: added });
+    const result = await runDiscoveryCycle();
+    // `diagnostics` lets the frontend explain a "0 new matches" result
+    // instead of leaving it looking like nothing ran — see discovery.js.
+    res.json({ added: result.jobs.length, jobs: result.jobs, diagnostics: result.diagnostics });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
