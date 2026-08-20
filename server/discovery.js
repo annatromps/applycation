@@ -152,6 +152,7 @@ async function runDiscoveryCycle() {
         status: "discovered",
         statusHistory: [{ status: "discovered", at: new Date().toISOString() }],
         notes: "",
+        favorite: false,
         feedback: null, // { rating: "up" | "down", note: "", ratedAt } — see routes/jobs.js's /feedback endpoint
         materials: null,
         appliedAt: null,

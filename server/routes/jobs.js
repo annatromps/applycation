@@ -75,7 +75,7 @@ router.post("/", async (req, res) => {
   let resolvedUrl = url || "";
   let resolvedDescription = description || "";
   if (!resolvedUrl) {
-    const found = await resolvePostingForJob({ title, company });
+    const found = await resolvePostingForJob({ title, company }, data.settings);
     if (found) {
       resolvedUrl = found.url;
       if (!resolvedDescription) resolvedDescription = found.description;
@@ -110,6 +110,7 @@ router.post("/", async (req, res) => {
     status: initialStatus,
     statusHistory: [{ status: initialStatus, at: now, note: "Added manually" }],
     notes: notes || "",
+    favorite: false,
     feedback: null,
     materials: null,
     appliedAt: ["submitted", "interviewing", "offer", "rejected", "withdrawn"].includes(initialStatus) ? now : null,
@@ -141,7 +142,7 @@ router.post("/", async (req, res) => {
 // those fields change, so a new description immediately feeds into both the
 // match score and the submission-ease score — no separate rescore step.
 router.patch("/:id", async (req, res) => {
-  const { url, description, location, salary } = req.body || {};
+  const { url, description, location, salary, favorite, notes } = req.body || {};
   const data = await db.read();
   const job = data.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "not found" });
@@ -156,6 +157,9 @@ router.patch("/:id", async (req, res) => {
   if (description !== undefined) job.description = description;
   if (location !== undefined) job.location = location;
   if (salary !== undefined) job.salary = salary;
+  // Favouriting/notes never affect scoring, so no rescore triggered by these.
+  if (favorite !== undefined) job.favorite = Boolean(favorite);
+  if (notes !== undefined) job.notes = notes;
 
   if (changedScoringInputs) {
     const jobForScoring = {
@@ -188,7 +192,7 @@ router.post("/:id/find-posting", async (req, res) => {
   if (!job) return res.status(404).json({ error: "not found" });
   if (job.url) return res.json({ found: false, reason: "Job already has a posting URL." });
 
-  const found = await resolvePostingForJob({ title: job.title, company: job.company });
+  const found = await resolvePostingForJob({ title: job.title, company: job.company }, data.settings);
   if (!found) return res.json({ found: false });
 
   job.url = found.url;

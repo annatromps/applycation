@@ -33,19 +33,32 @@ async function backfillMissingScores() {
   const data = await db.read();
   const activeProfiles = (data.criteriaProfiles || []).filter((c) => c.active !== false);
   let changed = false;
+  // AI web-search posting lookups (tier 2 of postingResolver.js) cost real
+  // money on top of the free ATS-API tier, so cap how many of THOSE get
+  // used in one backfill pass across potentially many jobs — the free tier
+  // above it has no such cap since it's free. Manual-add and the on-demand
+  // "Find posting" button are single-job actions and don't need this.
+  let aiPostingSearchesUsed = 0;
+  const maxAiPostingSearches = data.settings.maxAiPostingSearchesPerCycle ?? 10;
 
   for (const job of data.jobs) {
     // Try to find a real posting URL/description first (see
-    // server/postingResolver.js) — free public Greenhouse/Lever board
-    // lookups, no scraping, nothing for you to approve per job. If this
+    // server/postingResolver.js) — free public ATS-API lookups, then an
+    // AI web-search lookup if those come up empty and a provider's
+    // configured. No scraping, nothing for you to approve per job. If this
     // finds something, the scoring pass right after picks up the new
     // description too.
     if (!job.url) {
-      const found = await resolvePostingForJob({ title: job.title, company: job.company });
+      const found = await resolvePostingForJob(
+        { title: job.title, company: job.company },
+        data.settings,
+        { allowAiWebSearch: aiPostingSearchesUsed < maxAiPostingSearches }
+      );
       if (found) {
         job.url = found.url;
         if (!job.description) job.description = found.description;
         changed = true;
+        if (found.resolvedVia === "ai-web-search") aiPostingSearchesUsed++;
       }
     }
 

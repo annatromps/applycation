@@ -323,6 +323,43 @@ function attachRowHandlers() {
   });
 }
 
+// Wires up the Tracker table's per-row ★ favourite toggle and 📝 notes
+// button. Kept separate from attachRowHandlers() since those two buttons
+// need event.stopPropagation() (already set inline in the row markup) plus
+// their own PATCH calls, and this is Tracker-specific rather than shared
+// with the Dashboard/Review Queue row lists.
+function attachTrackerRowActionHandlers(jobs, onChange) {
+  const jobsById = Object.fromEntries(jobs.map((j) => [j.id, j]));
+  document.querySelectorAll("[data-fav]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.fav;
+      const job = jobsById[id] || {};
+      btn.disabled = true;
+      try {
+        await api(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify({ favorite: !job.favorite }) });
+        onChange();
+      } catch (err) {
+        alert(`Couldn't update favourite: ${err.message}`);
+        btn.disabled = false;
+      }
+    });
+  });
+  document.querySelectorAll("[data-notes]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.notes;
+      const job = jobsById[id] || {};
+      const note = prompt("Note for this job:", job.notes || "");
+      if (note === null) return; // cancelled
+      try {
+        await api(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify({ notes: note }) });
+        onChange();
+      } catch (err) {
+        alert(`Couldn't save note: ${err.message}`);
+      }
+    });
+  });
+}
+
 // ---------- Review Queue ----------
 async function renderReview() {
   main.innerHTML = `<h2>Review Queue</h2><div id="review-body">Loading…</div>`;
@@ -421,50 +458,63 @@ async function renderTracker(initialFilter) {
             .join("")}
         </select>
       </div>
+      <div class="filters" style="margin:0;">
+        <label style="margin:0;"><input type="checkbox" id="favorites-only-filter" /> ★ Favourites only</label>
+      </div>
       <div>
         <button id="find-missing-postings" class="secondary">🔎 Find missing postings</button>
         <button id="add-job-manually" class="secondary">+ Add job manually</button>
       </div>
     </div>
     <div class="card"><table id="tracker-table">
-      <thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Score /100</th><th>Discovered</th><th>Applied</th><th></th></tr></thead>
-      <tbody id="tracker-body"><tr><td colspan="7">Loading…</td></tr></tbody>
+      <thead><tr><th></th><th>Company</th><th>Role</th><th>Status</th><th>Score /100</th><th>Discovered</th><th>Applied</th><th>Notes</th><th></th></tr></thead>
+      <tbody id="tracker-body"><tr><td colspan="9">Loading…</td></tr></tbody>
     </table></div>
   `;
   const load = async () => {
     const filterValue = document.getElementById("status-filter").value;
+    const favoritesOnly = document.getElementById("favorites-only-filter").checked;
     const group = TRACKER_STATUS_GROUPS[filterValue];
     // A group filter (from a Dashboard stat card) covers several statuses at
     // once, so it's applied client-side over the full job list rather than
     // as a single-status server query.
     const allJobs = await api(`/jobs${!group && filterValue ? `?status=${filterValue}` : ""}`);
-    const jobs = group
+    let jobs = group
       ? allJobs.filter((j) => group.statuses.includes(j.status))
       : filterValue
       ? allJobs
       : allJobs.filter((j) => j.status !== "discovered");
+    if (favoritesOnly) jobs = jobs.filter((j) => j.favorite);
     const tbody = document.getElementById("tracker-body");
     if (!jobs.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty">No jobs in this view.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="empty">No jobs in this view.</td></tr>`;
       return;
     }
     tbody.innerHTML = jobs
       .map(
         (j) => `
       <tr data-job-id="${j.id}">
+        <td class="fav-cell"><button class="star-btn ${j.favorite ? "active" : ""}" data-fav="${j.id}" title="${
+          j.favorite ? "Remove favourite" : "Mark as favourite"
+        }" onclick="event.stopPropagation();">${j.favorite ? "★" : "☆"}</button></td>
         <td class="company-cell">${companyLogoHtml(j.company, 24)}<strong>${esc(j.company)}</strong></td>
         <td>${esc(j.title)}</td>
         <td><span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></td>
         <td class="score ${scoreClass(j.score ?? -1)}">${j.score ?? "–"}<div class="rating-mini">${ratingsBadgesHtml(j)}</div></td>
         <td>${fmtDate(j.discoveredAt)}</td>
         <td>${fmtDate(j.appliedAt)}</td>
+        <td class="notes-cell"><button class="icon-btn ${j.notes ? "active" : ""}" data-notes="${j.id}" title="${
+          j.notes ? esc(j.notes) : "Add a note"
+        }" onclick="event.stopPropagation();">${j.notes ? "📝" : "🗒️"}</button></td>
         <td>${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener" title="View posting" onclick="event.stopPropagation();">↗</a>` : ""}</td>
       </tr>`
       )
       .join("");
     attachRowHandlers();
+    attachTrackerRowActionHandlers(jobs, load);
   };
   document.getElementById("status-filter").addEventListener("change", load);
+  document.getElementById("favorites-only-filter").addEventListener("change", load);
   document.getElementById("add-job-manually").addEventListener("click", () => openAddJobModal(load));
 
   // Runs the automatic posting lookup (server/postingResolver.js) against
@@ -498,7 +548,7 @@ async function renderTracker(initialFilter) {
     alert(
       `Found ${found} of ${missing.length} missing posting${missing.length === 1 ? "" : "s"}.` +
         (found < missing.length
-          ? " The rest aren't on Greenhouse, Lever, Ashby, or Recruitee with a name match — open each job and paste the link in yourself under Posting details."
+          ? " Couldn't find the rest even with an AI web search (if configured) — open each job and paste the link in yourself under Posting details."
           : "")
     );
     load();
@@ -601,7 +651,7 @@ async function openJobDetail(id) {
     ${
       !job.url
         ? `<button id="find-posting" class="secondary">Try to find the real posting automatically</button>
-           <p class="hint">Checks the company's own Greenhouse/Lever job board using the title + company name — free, fully automatic, no sites for you to visit or approve. Only works if the company uses one of those and the name guess lines up; if it comes back empty, paste the link yourself below.</p>`
+           <p class="hint">First checks the company's own Greenhouse/Lever/Ashby/Recruitee job board using the title + company name (free, always tried). If that comes back empty and your AI provider in Settings is Anthropic, it then tries a real, grounded web search to find the actual listing — no sites for you to visit or approve either way. If both come back empty, paste the link yourself below.</p>`
         : ""
     }
     <label>Posting URL</label>
@@ -844,6 +894,10 @@ async function renderSettings() {
       <label>Max AI-scored jobs per discovery run (cost guard)</label>
       <input type="number" id="maxAiScoredPerCycle" min="0" value="${settings.maxAiScoredPerCycle ?? 15}" />
 
+      <label>Max AI web-search posting lookups per startup pass (cost guard, Anthropic only)</label>
+      <input type="number" id="maxAiPostingSearchesPerCycle" min="0" value="${settings.maxAiPostingSearchesPerCycle ?? 10}" />
+      <p class="hint">When "Find posting" (automatic or the on-demand button) can't find a match on Greenhouse/Lever/Ashby/Recruitee, and your AI provider above is Anthropic, it falls back to a real, grounded web search to find the actual posting instead of guessing — see "Automatic posting resolution" in the README. Anthropic bills web search separately from normal tokens, so this caps how many of those happen in one startup backfill pass over old jobs; the manual-add and per-job "Find posting" button aren't capped since they're one job at a time. Groq/Gemini don't support this fallback.</p>
+
       <label>Cover letter instructions for the AI</label>
       <textarea id="coverLetterInstructions" placeholder="e.g. keep it under 200 words; lead with enthusiasm for the mission before the skills match; slightly more formal tone for corporate/enterprise companies">${esc(settings.coverLetterInstructions || "")}</textarea>
       <p class="hint">Free text — tone, length, structure, whatever preferences you want the AI-assisted cover letter drafter (see "Optional: AI-assisted scoring &amp; cover letter drafting" above) to keep in mind for every letter it writes. Only used when an AI provider is configured above; template mode (no provider) ignores it. This is separate from the "Experience bank" on the <a href="#/me">Me</a> tab, which is source material, not instructions.</p>
@@ -919,6 +973,7 @@ async function renderSettings() {
       aiApiKey: document.getElementById("aiApiKey").value,
       aiModel: document.getElementById("aiModel").value,
       maxAiScoredPerCycle: Number(document.getElementById("maxAiScoredPerCycle").value),
+      maxAiPostingSearchesPerCycle: Number(document.getElementById("maxAiPostingSearchesPerCycle").value),
       coverLetterInstructions: document.getElementById("coverLetterInstructions").value,
       emailInbox: {
         enabled: document.getElementById("emailInboxEnabled").checked,

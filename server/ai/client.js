@@ -27,14 +27,30 @@ function isAIConfigured(settings) {
   return Boolean(settings && settings.aiProvider && settings.aiProvider !== "none" && settings.aiApiKey);
 }
 
-async function callAnthropic({ apiKey, model, prompt, maxTokens }) {
+// Anthropic's hosted, server-executed web search tool — the request/response
+// round-trip (searching, reading results) all happens on Anthropic's side in
+// this one API call, so no separate search API key or client-side tool loop
+// is needed here. Only used by server/aiPostingSearch.js, and only ever to
+// ground a real search result, never to let a model free-guess a URL from
+// training data (this app never fabricates links anywhere else either).
+// Anthropic bills web search usage separately from normal tokens.
+function isWebSearchConfigured(settings) {
+  return Boolean(settings && settings.aiProvider === "anthropic" && settings.aiApiKey);
+}
+
+async function callAnthropic({ apiKey, model, prompt, maxTokens, tools }) {
+  const body = { model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] };
+  if (tools && tools.length) body.tools = tools;
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Anthropic API request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
+  // Non-text content blocks (server_tool_use, web_search_tool_result) have
+  // no .text field, so they naturally drop out of this join — only the
+  // model's actual written answer ends up in the returned string.
   return (data.content || []).map((c) => c.text || "").join("\n").trim();
 }
 
@@ -68,15 +84,20 @@ async function callGemini({ apiKey, model, prompt, maxTokens }) {
  * the provider's API call fails — callers should treat that as "skip this
  * AI-assisted step" rather than fatal, same as before this abstraction existed.
  */
-async function callAI(settings, { prompt, maxTokens = 600 }) {
+async function callAI(settings, { prompt, maxTokens = 600, allowWebSearch = false }) {
   if (!isAIConfigured(settings)) {
     throw new Error("No AI provider configured — set one under Advanced settings.");
   }
   const model = settings.aiModel || DEFAULT_MODELS[settings.aiProvider];
   const apiKey = settings.aiApiKey;
   switch (settings.aiProvider) {
-    case "anthropic":
-      return callAnthropic({ apiKey, model, prompt, maxTokens });
+    case "anthropic": {
+      // allowWebSearch is silently a no-op for the other providers below —
+      // callers that actually need grounded search results should check
+      // isWebSearchConfigured() first rather than relying on this flag alone.
+      const tools = allowWebSearch ? [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }] : undefined;
+      return callAnthropic({ apiKey, model, prompt, maxTokens, tools });
+    }
     case "groq":
       return callGroq({ apiKey, model, prompt, maxTokens });
     case "gemini":
@@ -86,4 +107,4 @@ async function callAI(settings, { prompt, maxTokens = 600 }) {
   }
 }
 
-module.exports = { callAI, isAIConfigured, DEFAULT_MODELS, PROVIDER_LABELS };
+module.exports = { callAI, isAIConfigured, isWebSearchConfigured, DEFAULT_MODELS, PROVIDER_LABELS };

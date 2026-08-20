@@ -16,6 +16,7 @@ function defaultData() {
       aiApiKey: "", // key for whichever provider is selected above
       aiModel: "", // blank = provider's sensible default (see server/ai/client.js's DEFAULT_MODELS)
       maxAiScoredPerCycle: 15, // cost guard: cap AI-assisted scoring calls per discovery run
+      maxAiPostingSearchesPerCycle: 10, // cost guard: cap AI web-search posting lookups (server/aiPostingSearch.js) per startup backfill pass — only used when the free ATS-API lookup finds nothing and an Anthropic provider is configured; Anthropic bills web search separately from normal tokens
       autoGenerateMaterials: true, // build & save a tailored CV + cover letter for every surfaced match automatically
       maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)
       coverLetterInstructions: "", // free-text prompt fed to the AI-assisted cover letter drafter (server/docgen/coverLetter.js) — tone/emphasis preferences, e.g. "keep it under 200 words" or "lead with enthusiasm for the mission, not just the skills match". Only used when an AI provider is configured; template mode ignores it.
