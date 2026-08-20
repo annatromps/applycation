@@ -256,6 +256,28 @@ function showMessageModal(title, bodyHtml) {
   document.getElementById("close-modal").addEventListener("click", closeModal);
 }
 
+// Shared "nothing here" treatment for empty lists/tables — a dashed-border
+// card with an icon and a plain-language explanation, instead of bare
+// muted text floating in the middle of a page (which reads as "something's
+// broken" more than "there's genuinely nothing here right now"). In quite a
+// few of these spots an empty list is actually a GOOD thing — an empty
+// Review Queue means you're caught up, an empty Archive means you haven't
+// passed on anything — so the copy at each call site leans into that rather
+// than treating every empty state as a shortfall. `message` may contain
+// trusted HTML (e.g. a link) — it's inserted as-is, not escaped; `title` is
+// always plain text and is escaped. Mirrors the CV-upload empty state's own
+// dashed-card look (.cv-empty in styles.css) rather than inventing a second
+// pattern.
+function emptyStateHtml(icon, title, message) {
+  return `
+    <div class="empty-state">
+      <div class="empty-state-icon">${icon}</div>
+      <p class="empty-state-title">${esc(title)}</p>
+      ${message ? `<p class="empty-state-msg">${message}</p>` : ""}
+    </div>
+  `;
+}
+
 // ---------- Job feedback (👍/👎 + optional note) ----------
 // Shared between the Review Queue and the job detail modal. Feedback is
 // stored per-job and, if you've set an AI provider + API key, gets fed into the
@@ -279,7 +301,13 @@ function feedbackRowHtml(j) {
 function materialsLineHtml(j) {
   if (!j.materials) return `<p class="hint">📄 CV &amp; cover letter not generated yet.</p>`;
   const questions = j.materials.reviewQuestions || [];
-  return `<p class="hint">📄 CV &amp; cover letter ready (${fmtDate(j.materials.generatedAt)}) — <a href="/api/jobs/${j.id}/materials/cv" target="_blank">CV</a> &nbsp;·&nbsp; <a href="/api/jobs/${j.id}/materials/cover-letter" target="_blank">Cover letter</a></p>
+  // Default action is an in-app preview (previewMaterial(), same modal the
+  // job detail view uses) — not a direct link to the download endpoint,
+  // which browsers treat as "save this .docx" rather than "show me this."
+  // The preview modal itself still offers "Download .docx" for the real
+  // file. Needs its caller to wire up [data-preview] via previewMaterial()
+  // after inserting this into the DOM (see renderReview's draw()).
+  return `<p class="hint">📄 CV &amp; cover letter ready (${fmtDate(j.materials.generatedAt)}) — <button class="link-btn" data-preview="cv" data-job="${j.id}">👁️ View CV</button> &nbsp;·&nbsp; <button class="link-btn" data-preview="cover-letter" data-job="${j.id}">👁️ View cover letter</button></p>
     ${j.materials.tailoringSummary ? `<p class="hint">✏️ ${esc(j.materials.tailoringSummary)}</p>` : ""}
     ${questions.length ? reviewQuestionsHtml(questions) : ""}`;
 }
@@ -397,7 +425,7 @@ async function renderDashboard() {
       </div>
     </div>
     <h3>Recent activity</h3>
-    ${recent.length ? recent.map(jobRowHtml).join("") : `<div class="empty">No jobs yet — configure a criteria profile in Settings, then run discovery.</div>`}
+    ${recent.length ? recent.map(jobRowHtml).join("") : emptyStateHtml("🧭", "No jobs yet", `Set up a <a href="#/me">criteria profile</a>, then hit "Run discovery now" above to start finding matches.`)}
   `;
   document.getElementById("dash-body").querySelectorAll("[data-nav]").forEach((card) => {
     card.addEventListener("click", () => {
@@ -585,7 +613,7 @@ function attachTrackerRowActionHandlers(jobs, onChange) {
         await api(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify({ favorite: !job.favorite }) });
         onChange();
       } catch (err) {
-        alert(`Couldn't update favourite: ${err.message}`);
+        showMessageModal("Couldn't update favourite", `<p>${esc(err.message)}</p>`);
         btn.disabled = false;
       }
     });
@@ -600,7 +628,7 @@ function attachTrackerRowActionHandlers(jobs, onChange) {
         await api(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify({ notes: note }) });
         onChange();
       } catch (err) {
-        alert(`Couldn't save note: ${err.message}`);
+        showMessageModal("Couldn't save note", `<p>${esc(err.message)}</p>`);
       }
     });
   });
@@ -652,7 +680,7 @@ async function renderReview() {
   const jobs = await api("/jobs?status=discovered");
   const body = document.getElementById("review-body");
   if (!jobs.length) {
-    body.innerHTML = `<div class="empty">No new matches waiting for review.</div>`;
+    body.innerHTML = emptyStateHtml("✅", "You're all caught up", "No new matches waiting for review right now — check back after your next discovery run.");
     return;
   }
 
@@ -754,7 +782,7 @@ async function renderReview() {
       .sort(REVIEW_SORTS[sortKey] || REVIEW_SORTS["score-desc"]);
 
     if (!list.length) {
-      listEl.innerHTML = `<div class="empty">No jobs match these filters.</div>`;
+      listEl.innerHTML = emptyStateHtml("🔍", "No matches for these filters", "Try lowering the minimum score or clearing the source filter above.");
       return;
     }
     listEl.innerHTML = list.map(reviewJobRowHtml).join("");
@@ -794,6 +822,9 @@ async function renderReview() {
       })
     );
     listEl.querySelectorAll("[data-detail]").forEach((btn) => btn.addEventListener("click", () => openJobDetail(btn.dataset.detail)));
+    listEl.querySelectorAll("[data-preview]").forEach((btn) =>
+      btn.addEventListener("click", () => previewMaterial(btn.dataset.job, btn.dataset.preview))
+    );
   };
 
   document.getElementById("review-sort").addEventListener("change", draw);
@@ -866,7 +897,7 @@ async function renderTracker(initialFilter) {
     if (favoritesOnly) jobs = jobs.filter((j) => j.favorite);
     const tbody = document.getElementById("tracker-body");
     if (!jobs.length) {
-      tbody.innerHTML = `<tr><td colspan="9" class="empty">No jobs in this view.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9">${emptyStateHtml("📋", "No jobs in this view", `Try a different status filter above, or turn off "Favourites only".`)}</td></tr>`;
       return;
     }
     tbody.innerHTML = jobs
@@ -970,7 +1001,7 @@ async function renderArchive() {
   const jobs = await api("/jobs?status=dismissed");
   const body = document.getElementById("archive-body");
   if (!jobs.length) {
-    body.innerHTML = `<div class="empty">Nothing dismissed yet — jobs you pass on (via "Dismiss" or a 👎 in the Review Queue) end up here instead of cluttering your Tracker.</div>`;
+    body.innerHTML = emptyStateHtml("🗄️", "Nothing archived", `Jobs you pass on — via "Dismiss" or a 👎 in Review Queue — end up here instead of cluttering your Tracker.`);
     return;
   }
   const jobsById = Object.fromEntries(jobs.map((j) => [j.id, j]));
@@ -1733,7 +1764,7 @@ async function renderMe() {
         <h3>Criteria profiles</h3>
         <button id="add-criteria">+ Add profile</button>
       </div>
-      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || `<p class="empty">No criteria profiles yet — add one to start discovering jobs.</p>`}</div>
+      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || emptyStateHtml("🎯", "No criteria profiles yet", `Click "+ Add profile" above to start discovering jobs automatically.`)}</div>
     </div>
 
     <details class="card advanced-settings" id="profile-json-details">

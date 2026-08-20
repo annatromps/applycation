@@ -221,6 +221,18 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
 
 .empty { color: var(--grey); text-align: center; padding: 48px 0; font-size: 14px; }
 
+/* Shared empty-state card (see emptyStateHtml() in app.js) — same dashed-
+   card look as .cv-empty below, generalized for reuse across the Review
+   Queue, Archive, Tracker, Dashboard and criteria-profile lists. */
+.empty-state {
+  text-align: center; padding: 44px 24px; margin: 6px 0;
+  border: 1.5px dashed var(--border); border-radius: var(--radius-sm); background: var(--bg);
+}
+.empty-state-icon { font-size: 30px; line-height: 1; margin-bottom: 10px; }
+.empty-state-title { margin: 0 0 4px; font-size: 15px; font-weight: 700; color: var(--ink); }
+.empty-state-msg { margin: 0 auto; max-width: 440px; font-size: 13.5px; color: var(--grey); line-height: 1.5; }
+.empty-state-msg a { color: var(--accent); font-weight: 600; }
+
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(20, 18, 50, 0.45); backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center; z-index: 100;
