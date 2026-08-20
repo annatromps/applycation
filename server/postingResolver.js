@@ -35,12 +35,22 @@ const { isPostingSearchConfigured } = require("./ai/client");
  * @param {{allowAiWebSearch?: boolean}} [options] - set allowAiWebSearch:
  *   false to skip tier 2 even if AI is configured (used by the startup
  *   backfill to enforce its per-cycle cost cap across many jobs at once).
- * @returns {Promise<{found: true, url: string, description: string, resolvedVia: "greenhouse"|"lever"|"ashby"|"recruitee"|"ai-web-search"} | {found: false, reason: "no_title_or_company"|"no_ai_provider_configured"|"ai_capped_this_run"|"ai_tried_no_confident_match"}>}
+ * @returns {Promise<{found: true, url: string, description: string, resolvedVia: "greenhouse"|"lever"|"ashby"|"recruitee"|"ai-web-search"} | {found: false, reason: "no_title_or_company"|"no_ai_provider_configured"|"ai_capped_this_run"|"ai_tried_no_confident_match"|"ai_error", detail?: string}>}
  *   Always returns an object now (never bare null) so callers — especially
  *   the "Find missing postings" bulk button — can explain WHY a job stayed
  *   unresolved instead of just reporting a raw count. See each reason's
  *   name for what it means; the AI-specific reasons only ever occur when
  *   tier 1 (the free ATS lookup) already came up empty first.
+ *
+ *   "ai_tried_no_confident_match" vs "ai_error" is a deliberate split, not
+ *   just extra granularity: the first means the provider was reached and
+ *   genuinely couldn't find a confident match (the company just may not be
+ *   easily findable); the second means the provider CALL ITSELF failed —
+ *   wrong endpoint/field name, an auth/billing rejection, a timeout — which
+ *   looks identical to "not found" from the outside unless this distinction
+ *   is made. `detail` carries the actual error message for that case, since
+ *   without it there's no way to tell "nothing found" apart from "this is
+ *   broken" other than reading server logs.
  */
 async function resolvePostingForJob(job, settings, { allowAiWebSearch = true } = {}) {
   if (!job || !job.title || !job.company) return { found: false, reason: "no_title_or_company" };
@@ -61,7 +71,7 @@ async function resolvePostingForJob(job, settings, { allowAiWebSearch = true } =
     return { found: false, reason: "ai_tried_no_confident_match" };
   } catch (e) {
     console.error(`[postingResolver] AI web-search lookup failed for "${job.title}" @ "${job.company}":`, e.message);
-    return { found: false, reason: "ai_tried_no_confident_match" };
+    return { found: false, reason: "ai_error", detail: e.message };
   }
 }
 

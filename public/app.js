@@ -540,6 +540,11 @@ function findMissingPostingsSummaryHtml(results) {
     no_ai_provider_configured: "Not on Greenhouse/Lever/Ashby/Recruitee, and no AI provider is set up to try a web search instead",
     ai_capped_this_run: "Not on those four platforms — AI web search was skipped (this run's cost cap was reached)",
     ai_tried_no_confident_match: "Not on those four platforms, and an AI web search didn't find a confident match either",
+    // Distinct from the row above — this means the AI web search call
+    // itself broke (not just "searched and found nothing"). The actual
+    // error is shown inline below since a label alone can't say what
+    // specifically failed.
+    ai_error: "Not on those four platforms, and the AI web search itself failed to run — this is a real error, not just \"nothing found\"",
     no_title_or_company: "Missing a title or company to search for",
     request_failed: "The request itself failed (network/API issue) — worth retrying",
     other: "Couldn't find it automatically",
@@ -551,12 +556,20 @@ function findMissingPostingsSummaryHtml(results) {
     .forEach((r) => {
       (groups[r.reasonCode] = groups[r.reasonCode] || []).push(r.job);
     });
+  // Every ai_error job likely failed for the SAME underlying reason (a
+  // misconfigured key, a broken endpoint) rather than each having its own
+  // distinct problem, so one representative example is more useful here
+  // than repeating it per job — this is what actually tells you (or
+  // whoever's debugging this) what's really wrong instead of just "AI
+  // couldn't find it," which looks identical to a clean miss otherwise.
+  const aiErrorExample = results.find((r) => r.reasonCode === "ai_error" && r.detail)?.detail;
   const groupHtml = Object.entries(groups)
     .sort((a, b) => b[1].length - a[1].length)
     .map(
       ([code, jobs]) => `
       <div class="posting-reason-group">
         <p class="posting-reason-label">${esc(LABELS[code] || code)} <span class="hint">(${jobs.length})</span></p>
+        ${code === "ai_error" && aiErrorExample ? `<p class="hint">Actual error: <code>${esc(aiErrorExample)}</code></p>` : ""}
         <ul class="posting-reason-jobs">
           ${jobs.map((j) => `<li><button class="link-btn" data-open-job="${j.id}">${esc(j.company)} — ${esc(j.title)}</button></li>`).join("")}
         </ul>
@@ -564,6 +577,7 @@ function findMissingPostingsSummaryHtml(results) {
     )
     .join("");
   const noAiConfigured = Boolean(groups.no_ai_provider_configured);
+  const hasAiError = Boolean(groups.ai_error);
   return `
     <span class="close-x" id="close-modal">&times;</span>
     <h3>Found ${found} of ${results.length}</h3>
@@ -571,6 +585,8 @@ function findMissingPostingsSummaryHtml(results) {
     <p class="hint">${
       noAiConfigured
         ? `<a href="#" id="goto-ai-setup">Add an Anthropic or Gemini API key</a> in Settings to let a web search try the ones tier 1 can't reach. `
+        : hasAiError
+        ? `<a href="#" id="goto-ai-setup">Check your AI provider settings</a> — the error above suggests something's misconfigured, not that these jobs are unfindable. `
         : ""
     }Click a job above to open it straight to Posting details and paste the link in yourself, if you have it.</p>
   `;
@@ -954,7 +970,7 @@ async function renderTracker(initialFilter) {
       btn.textContent = `Looking… (${i + 1}/${missing.length})`;
       try {
         const result = await api(`/jobs/${missing[i].id}/find-posting`, { method: "POST" });
-        results.push({ job: missing[i], found: Boolean(result.found), reasonCode: result.reasonCode || "other" });
+        results.push({ job: missing[i], found: Boolean(result.found), reasonCode: result.reasonCode || "other", detail: result.detail });
       } catch (err) {
         console.error(`Find-posting failed for ${missing[i].title} @ ${missing[i].company}:`, err.message);
         results.push({ job: missing[i], found: false, reasonCode: "request_failed" });

@@ -261,6 +261,10 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
 .posting-reason-label { margin: 0 0 6px; font-weight: 600; }
 .posting-reason-jobs { margin: 0; padding-left: 4px; list-style: none; }
 .posting-reason-jobs li { margin: 4px 0; }
+.posting-reason-group code {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 5px; font-size: 12px; word-break: break-word;
+}
 
 /* Review Queue's "Re-check against current criteria" confirm list. */
 .recheck-list { margin: 10px 0; padding-left: 4px; list-style: none; max-height: 260px; overflow-y: auto; }

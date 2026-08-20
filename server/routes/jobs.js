@@ -237,8 +237,13 @@ router.post("/:id/find-posting", async (req, res) => {
         "Not on Greenhouse/Lever/Ashby/Recruitee — add an Anthropic or Gemini API key in Settings to also try an AI web search.",
       ai_capped_this_run: "Not on Greenhouse/Lever/Ashby/Recruitee — AI web search was skipped this run (cost cap reached).",
       ai_tried_no_confident_match: "Not on Greenhouse/Lever/Ashby/Recruitee, and the AI web search didn't find a confident match either.",
+      // Distinct from the line above on purpose — this means the AI web
+      // search call itself broke (bad request, auth/billing rejected,
+      // timed out), not that it searched cleanly and found nothing. See
+      // postingResolver.js's header comment for why this split matters.
+      ai_error: `Not on Greenhouse/Lever/Ashby/Recruitee, and the AI web search failed to even run: ${found.detail || "unknown error"}`,
     };
-    return res.json({ found: false, reasonCode: found.reason, reason: REASON_TEXT[found.reason] || "Couldn't find it automatically." });
+    return res.json({ found: false, reasonCode: found.reason, reason: REASON_TEXT[found.reason] || "Couldn't find it automatically.", detail: found.detail });
   }
 
   job.url = found.url;

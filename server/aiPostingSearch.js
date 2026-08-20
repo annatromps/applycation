@@ -91,6 +91,18 @@ async function findViaGemini({ title, company }, settings) {
 }
 
 /**
+ * Deliberately does NOT swallow provider errors into a bare null — an
+ * actual failure (bad endpoint/field name, auth/billing rejected, a
+ * timeout) and a clean "searched, found nothing confident" result look
+ * identical from the outside otherwise, and only the second one is
+ * actually "this company just isn't findable." The Gemini path in
+ * particular is unverified against a live key (see header comment above)
+ * — if it's silently wrong in some way, the ONLY way anyone finds out is
+ * this error surfacing somewhere a human can see it, since this sandbox
+ * can't call it directly to check. Throws with the original message
+ * intact; callers (server/postingResolver.js) are responsible for
+ * catching it and turning it into a reason code the UI can show.
+ *
  * @param {{title: string, company: string}} job
  * @param {object} settings
  * @returns {Promise<{url: string, description: string, resolvedVia: "ai-web-search"}|null>}
@@ -103,7 +115,7 @@ async function findPostingViaAIWebSearch({ title, company }, settings) {
       return await findViaAnthropic({ title, company }, settings);
     } catch (e) {
       console.error(`[aiPostingSearch] Anthropic lookup failed for "${title}" @ "${company}":`, e.message);
-      return null;
+      throw e;
     }
   }
 
@@ -112,7 +124,7 @@ async function findPostingViaAIWebSearch({ title, company }, settings) {
       return await findViaGemini({ title, company }, settings);
     } catch (e) {
       console.error(`[aiPostingSearch] Gemini lookup failed for "${title}" @ "${company}":`, e.message);
-      return null;
+      throw e;
     }
   }
 
