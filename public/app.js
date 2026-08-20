@@ -522,8 +522,8 @@ async function renderTracker(initialFilter) {
   // one click instead of opening each job individually. Best-effort by
   // nature — only finds a posting for companies actually on Greenhouse,
   // Lever, Ashby, or Recruitee with a slug that matches their name (tier 1),
-  // or that a grounded AI web search can find (tier 2, Anthropic only,
-  // needs a provider + key set below). The completion message checks
+  // or that a grounded AI web search can find (tier 2, Anthropic or Gemini
+  // only, needs a provider + key set below). The completion message checks
   // whether tier 2 is actually configured rather than just saying "(if
   // configured)" — no point being vague when we know the real answer.
   document.getElementById("find-missing-postings").addEventListener("click", async (e) => {
@@ -534,7 +534,7 @@ async function renderTracker(initialFilter) {
       alert("Every job in your Tracker already has a posting link.");
       return;
     }
-    const aiWebSearchOn = settings.aiProvider === "anthropic" && Boolean(settings.aiApiKey);
+    const aiWebSearchOn = (settings.aiProvider === "anthropic" || settings.aiProvider === "gemini") && Boolean(settings.aiApiKey);
     btn.disabled = true;
     let found = 0;
     for (let i = 0; i < missing.length; i++) {
@@ -559,7 +559,7 @@ async function renderTracker(initialFilter) {
       openModal(`
         <span class="close-x" id="close-modal">&times;</span>
         <h3>Found ${found} of ${missing.length}</h3>
-        <p>The rest aren't on Greenhouse, Lever, Ashby, or Recruitee — and AI web search isn't set up, so that fallback wasn't tried. <a href="#/settings" id="goto-ai-setup">Add an Anthropic API key</a> under Settings → Advanced to let it search the web for these automatically next time, or open each job now and paste the link in yourself under Posting details.</p>
+        <p>The rest aren't on Greenhouse, Lever, Ashby, or Recruitee — and AI web search isn't set up, so that fallback wasn't tried. <a href="#/settings" id="goto-ai-setup">Add an Anthropic or Gemini API key</a> under Settings → Advanced to let it search the web for these automatically next time, or open each job now and paste the link in yourself under Posting details.</p>
       `);
       document.getElementById("close-modal").addEventListener("click", closeModal);
       document.getElementById("goto-ai-setup").addEventListener("click", closeModal);
@@ -663,7 +663,7 @@ async function openJobDetail(id) {
     ${
       !job.url
         ? `<button id="find-posting" class="secondary">Try to find the real posting automatically</button>
-           <p class="hint">First checks the company's own Greenhouse/Lever/Ashby/Recruitee job board using the title + company name (free, always tried). If that comes back empty and your AI provider in Settings is Anthropic, it then tries a real, grounded web search to find the actual listing — no sites for you to visit or approve either way. If both come back empty, paste the link yourself below.</p>`
+           <p class="hint">First checks the company's own Greenhouse/Lever/Ashby/Recruitee job board using the title + company name (free, always tried). If that comes back empty and your AI provider in Settings is Anthropic or Gemini, it then tries a real, grounded web search to find the actual listing — no sites for you to visit or approve either way. If both come back empty, paste the link yourself below.</p>`
         : ""
     }
     <label>Posting URL</label>
@@ -848,7 +848,7 @@ async function renderSettings() {
     none: { placeholder: "", hint: "" },
     anthropic: { placeholder: "sk-ant-...", hint: "Paid — console.anthropic.com → API Keys.", model: "claude-sonnet-4-5" },
     groq: { placeholder: "gsk_...", hint: "Free, no card required — console.groq.com/keys.", model: "openai/gpt-oss-120b" },
-    gemini: { placeholder: "AIza...", hint: "Free, no card required — aistudio.google.com/apikey.", model: "gemini-2.5-flash" },
+    gemini: { placeholder: "AIza...", hint: "Free, no card required — aistudio.google.com/apikey. The web-search posting lookup specifically needs billing enabled on that Google account too (usage still lands inside Google's free daily grounding allowance at this app's volume) — everything else works on the plain free-tier key.", model: "gemini-2.5-flash" },
   };
 
   document.getElementById("settings-body").innerHTML = `
@@ -923,7 +923,7 @@ async function renderSettings() {
       <p class="hint">If AI-assisted cover-letter drafting is on (see below), each generation is an API call — this caps spend per run. Anything skipped by the cap can still be generated manually from the job's detail view.</p>
 
       <div class="section-title">Optional: AI-assisted scoring, drafting &amp; posting lookup</div>
-      <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, more natural cover-letter drafting, CV auto-fill, the CV tailoring summary, email-digest job extraction, and — for Anthropic specifically — a real web search to find a job's actual posting page when the free ATS lookup can't (see "Automatic posting resolution" in the README). This is a completely separate thing from this chat: your app runs on Railway with no connection to any Claude conversation, so it needs its own API key here to make its own calls — pasting a key below doesn't use up or relate to anything in this chat, and vice versa. Leave provider as "None" to use plain rule-based scoring and template drafting instead — everything except the web-search posting lookup still works fully without this. Groq and Gemini both have genuinely free tiers (no card required) if you don't want to pay for Anthropic credits, though only Anthropic supports the web-search posting lookup.</p>
+      <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, more natural cover-letter drafting, CV auto-fill, the CV tailoring summary, email-digest job extraction, and — for Anthropic or Gemini specifically — a real web search to find a job's actual posting page when the free ATS lookup can't (see "Automatic posting resolution" in the README). This is a completely separate thing from this chat: your app runs on Railway with no connection to any Claude conversation, so it needs its own API key here to make its own calls — pasting a key below doesn't use up or relate to anything in this chat, and vice versa. Leave provider as "None" to use plain rule-based scoring and template drafting instead — everything except the web-search posting lookup still works fully without this. One provider is all you need for everything on this page, including the posting lookup — Gemini's plain free tier plus billing enabled for search (still effectively free at this app's volume) covers the same ground Anthropic's paid key does; Groq doesn't support the web-search posting lookup at all.</p>
       <label>AI provider</label>
       <select id="aiProvider">
         ${["none","groq","gemini","anthropic"].map((p) => `<option value="${p}" ${p === aiProvider ? "selected" : ""}>${p === "none" ? "None" : p === "anthropic" ? "Anthropic (Claude) — paid" : p === "groq" ? "Groq — free" : "Google Gemini — free"}</option>`).join("")}
@@ -938,9 +938,9 @@ async function renderSettings() {
       <label>Max AI-scored jobs per discovery run (cost guard)</label>
       <input type="number" id="maxAiScoredPerCycle" min="0" value="${settings.maxAiScoredPerCycle ?? 15}" />
 
-      <label>Max AI web-search posting lookups per startup pass (cost guard, Anthropic only)</label>
+      <label>Max AI web-search posting lookups per startup pass (cost guard, Anthropic or Gemini only)</label>
       <input type="number" id="maxAiPostingSearchesPerCycle" min="0" value="${settings.maxAiPostingSearchesPerCycle ?? 10}" />
-      <p class="hint">When "Find posting" (automatic or the on-demand button) can't find a match on Greenhouse/Lever/Ashby/Recruitee, and your AI provider above is Anthropic, it falls back to a real, grounded web search to find the actual posting instead of guessing — see "Automatic posting resolution" in the README. Anthropic bills web search separately from normal tokens, so this caps how many of those happen in one startup backfill pass over old jobs; the manual-add and per-job "Find posting" button aren't capped since they're one job at a time. Groq/Gemini don't support this fallback.</p>
+      <p class="hint">When "Find posting" (automatic or the on-demand button) can't find a match on Greenhouse/Lever/Ashby/Recruitee, and your AI provider above is Anthropic or Gemini, it falls back to a real, grounded web search to find the actual posting instead of guessing — see "Automatic posting resolution" in the README. Both providers bill grounded search separately from normal usage, so this caps how many of those happen in one startup backfill pass over old jobs; the manual-add and per-job "Find posting" button aren't capped since they're one job at a time. Groq doesn't support this fallback.</p>
 
       <label>Cover letter instructions for the AI</label>
       <textarea id="coverLetterInstructions" placeholder="e.g. keep it under 200 words; lead with enthusiasm for the mission before the skills match; slightly more formal tone for corporate/enterprise companies">${esc(settings.coverLetterInstructions || "")}</textarea>

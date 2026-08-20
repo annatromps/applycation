@@ -9,11 +9,12 @@
 //      fetches, nothing that needs a human to approve fetching an
 //      individual site. Only works for companies actually on one of those
 //      four platforms with a name-matching slug.
-//   2. If that finds nothing AND an Anthropic provider is configured, a
+//   2. If that finds nothing AND a provider with real search grounding is
+//      configured (Anthropic or Gemini — see server/ai/client.js), a
 //      web-search-grounded AI lookup (see server/aiPostingSearch.js) — this
 //      covers everything else: custom ATS instances, Workday, a plain
-//      careers page, whatever. Skipped entirely with no AI provider set, or
-//      when the caller has hit its per-cycle cap (see server/index.js).
+//      careers page, whatever. Skipped entirely with no such provider set,
+//      or when the caller has hit its per-cycle cap (see server/index.js).
 //
 // This is designed to run unattended: automatically whenever such a job is
 // created or found at startup (see server/index.js's backfill and

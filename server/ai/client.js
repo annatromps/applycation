@@ -4,7 +4,9 @@
 // which provider is configured. Supports:
 //   - "anthropic" (Claude)      — paid, no ongoing free tier
 //   - "groq"      (open models) — free tier, no card required
-//   - "gemini"    (Google)      — free tier, no card required
+//   - "gemini"    (Google)      — free tier, no card required (grounded web
+//                  search specifically needs a billing-enabled key though —
+//                  see isGeminiSearchConfigured below)
 // settings.aiProvider: "none" | "anthropic" | "groq" | "gemini"
 // settings.aiApiKey:   the key for whichever provider is selected
 // settings.aiModel:    model name for that provider (falls back to a
@@ -33,9 +35,31 @@ function isAIConfigured(settings) {
 // is needed here. Only used by server/aiPostingSearch.js, and only ever to
 // ground a real search result, never to let a model free-guess a URL from
 // training data (this app never fabricates links anywhere else either).
-// Anthropic bills web search usage separately from normal tokens.
-function isWebSearchConfigured(settings) {
+// Anthropic charges per search (no free quota); see PROVIDER_LABELS.
+function isAnthropicSearchConfigured(settings) {
   return Boolean(settings && settings.aiProvider === "anthropic" && settings.aiApiKey);
+}
+
+// Google's equivalent grounded-search capability, reached through Gemini's
+// newer Interactions API (a different endpoint/shape than the plain
+// generateContent calls callGemini() below makes) rather than
+// generateContent, per Google's own current docs. Requires a
+// billing-enabled Gemini API key (unlike the rest of this app's Gemini
+// usage, which works on the plain no-card free tier) — but usage this app
+// generates stays well inside Google's free daily grounding allowance in
+// practice, since lookups are capped per cycle. Wired up so a single Gemini
+// key can cover every AI-assisted feature in this app, including posting
+// search, without also needing an Anthropic key. See
+// server/aiPostingSearch.js.
+function isGeminiSearchConfigured(settings) {
+  return Boolean(settings && settings.aiProvider === "gemini" && settings.aiApiKey);
+}
+
+// True if *some* provider capable of grounded web search is configured —
+// the only thing server/postingResolver.js needs to know to decide whether
+// tier 2 is worth attempting at all.
+function isPostingSearchConfigured(settings) {
+  return isAnthropicSearchConfigured(settings) || isGeminiSearchConfigured(settings);
 }
 
 async function callAnthropic({ apiKey, model, prompt, maxTokens, tools }) {
@@ -78,6 +102,47 @@ async function callGemini({ apiKey, model, prompt, maxTokens }) {
   return parts.map((p) => p.text || "").join("\n").trim();
 }
 
+// Grounded web search via Gemini's Interactions API — a different endpoint
+// and response shape than callGemini() above, per Google's current docs
+// (the older generateContent-based grounding tool is being retired in
+// favour of this one). Built from Google's published API reference rather
+// than tested against a live key (this environment has no outbound network
+// access to verify it) — see server/aiPostingSearch.js's header comment for
+// what to check if this needs a fix once it's actually used against a real
+// Gemini key.
+//
+// Returns { text, citationUrls } — citationUrls comes from the response's
+// own url_citation annotations (URLs Google's grounding actually found),
+// kept separate from the model's own written text so callers can
+// cross-check a claimed URL against what was really found rather than
+// trusting the model's prose alone.
+async function callGeminiWithSearch({ apiKey, model, prompt, maxTokens }) {
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      tools: [{ type: "google_search" }],
+      generation_config: { max_output_tokens: maxTokens },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini Interactions API request failed (${res.status}): ${(await res.text()).slice(0, 500)}`);
+  const data = await res.json();
+  const steps = data.steps || [];
+  let text = "";
+  const citationUrls = [];
+  for (const step of steps) {
+    for (const block of step.content || []) {
+      if (block.type === "text" && block.text) text += block.text + "\n";
+      for (const ann of block.annotations || []) {
+        if (ann.type === "url_citation" && ann.url) citationUrls.push(ann.url);
+      }
+    }
+  }
+  return { text: text.trim(), citationUrls };
+}
+
 /**
  * Sends `prompt` to whichever provider is configured in settings and
  * returns the raw text response. Throws if no provider is configured, or if
@@ -94,7 +159,9 @@ async function callAI(settings, { prompt, maxTokens = 600, allowWebSearch = fals
     case "anthropic": {
       // allowWebSearch is silently a no-op for the other providers below —
       // callers that actually need grounded search results should check
-      // isWebSearchConfigured() first rather than relying on this flag alone.
+      // isPostingSearchConfigured() first rather than relying on this flag
+      // alone (and for Gemini, call callGeminiWithSearch() directly instead
+      // of callAI() — different endpoint/response shape, see above).
       const tools = allowWebSearch ? [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }] : undefined;
       return callAnthropic({ apiKey, model, prompt, maxTokens, tools });
     }
@@ -107,4 +174,13 @@ async function callAI(settings, { prompt, maxTokens = 600, allowWebSearch = fals
   }
 }
 
-module.exports = { callAI, isAIConfigured, isWebSearchConfigured, DEFAULT_MODELS, PROVIDER_LABELS };
+module.exports = {
+  callAI,
+  callGeminiWithSearch,
+  isAIConfigured,
+  isAnthropicSearchConfigured,
+  isGeminiSearchConfigured,
+  isPostingSearchConfigured,
+  DEFAULT_MODELS,
+  PROVIDER_LABELS,
+};
