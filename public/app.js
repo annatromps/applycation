@@ -1445,11 +1445,13 @@ async function renderMe() {
 }
 
 function criteriaRowHtml(c) {
+  const isActive = c.active !== false;
   return `
     <div class="list-item">
-      <h4>${esc(c.name || "(unnamed profile)")} ${c.active ? "" : '<span class="badge withdrawn">inactive</span>'}</h4>
+      <h4>${esc(c.name || "(unnamed profile)")} ${isActive ? "" : '<span class="badge withdrawn">inactive</span>'}</h4>
       <div class="meta">Titles: ${esc((c.titleKeywords || []).join(", ") || "—")} · Locations: ${esc((c.locations || []).join(", ") || (c.remoteOk ? "remote ok" : "—"))}</div>
       ${c.aiPreferences ? `<div class="meta">AI preferences: "${esc(c.aiPreferences.slice(0, 140))}${c.aiPreferences.length > 140 ? "…" : ""}"</div>` : ""}
+      <button class="secondary" data-toggle-criteria="${c.id}" data-active="${isActive}">${isActive ? "Deactivate" : "Activate"}</button>
       <button class="secondary" data-edit-criteria="${c.id}">Edit</button>
       <button class="danger" data-delete-criteria="${c.id}">Delete</button>
     </div>
@@ -1461,6 +1463,16 @@ function attachCriteriaHandlers() {
     btn.addEventListener("click", async () => {
       const criteria = await api("/criteria");
       openCriteriaEditor(criteria.find((c) => c.id === btn.dataset.editCriteria));
+    })
+  );
+  // Quick on/off without opening the full editor — discovery only ever
+  // searches active profiles (see server/discovery.js), so this is the
+  // fastest way to pause/resume one without losing its settings.
+  document.querySelectorAll("[data-toggle-criteria]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const isActive = btn.dataset.active === "true";
+      await api(`/criteria/${btn.dataset.toggleCriteria}`, { method: "PUT", body: JSON.stringify({ active: !isActive }) });
+      renderMe();
     })
   );
   document.querySelectorAll("[data-delete-criteria]").forEach((btn) =>
