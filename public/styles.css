@@ -86,21 +86,24 @@ body {
 .main h2 { margin-top: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
 .main h3 { font-weight: 700; letter-spacing: -0.01em; }
 
-.stats-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
+.stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 26px; }
 .stat-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px 22px;
-  min-width: 150px;
+  padding: 20px 22px;
   box-shadow: var(--shadow-sm);
   transition: box-shadow 0.15s ease, transform 0.15s ease;
 }
 .stat-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.stat-card .stat-icon { font-size: 22px; line-height: 1; margin-bottom: 8px; }
 .stat-card .value { font-size: 30px; font-weight: 800; color: var(--navy); letter-spacing: -0.02em; }
 .stat-card .label { font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
 .stat-card.clickable { cursor: pointer; }
 .stat-card.clickable:hover { border-color: var(--accent); }
+@media (max-width: 900px) {
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+}
 
 .card {
   background: var(--card);
@@ -297,6 +300,43 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
 }
 .review-answer-box label { margin-top: 0; }
 .review-answer-box textarea { min-height: 70px; }
+
+/* ---------- Me tab: baseline CV file card ---------- */
+.cv-file-row {
+  display: flex; align-items: center; gap: 14px; margin-top: 14px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+.cv-file-icon {
+  width: 42px; height: 42px; flex-shrink: 0; border-radius: 10px;
+  background: var(--accent-bg); display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+}
+.cv-file-info { flex: 1; min-width: 0; }
+.cv-file-name { font-weight: 700; font-size: 14.5px; color: var(--ink); }
+.cv-file-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.btn-pill {
+  display: inline-block; font-size: 12.5px; font-weight: 600; text-decoration: none;
+  padding: 6px 13px; border-radius: 999px; background: white; color: var(--navy);
+  border: 1px solid var(--border); transition: background 0.15s ease, border-color 0.15s ease;
+}
+.btn-pill:hover { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-dark); }
+.btn-pill.danger { color: var(--red); }
+.btn-pill.danger:hover { background: var(--red-bg); border-color: var(--red); }
+.cv-autofill-row {
+  margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.cv-empty {
+  margin-top: 14px; padding: 28px 16px; text-align: center; color: var(--grey);
+  border: 1.5px dashed var(--border); border-radius: var(--radius-sm); background: var(--bg);
+}
+.cv-empty-icon { font-size: 26px; margin-bottom: 6px; }
+.cv-empty p { margin: 0; font-size: 13.5px; }
+.cv-upload-row {
+  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.cv-upload-row input[type=file] { width: auto; flex: 1; min-width: 180px; }
 
 .feedback-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
 .fb-btn {

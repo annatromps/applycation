@@ -225,6 +225,7 @@ const routes = {
   dashboard: renderDashboard,
   review: renderReview,
   tracker: renderTracker,
+  me: renderMe,
   settings: renderSettings,
 };
 
@@ -243,11 +244,11 @@ async function renderDashboard() {
   const recent = jobs.slice(0, 8);
   document.getElementById("dash-body").innerHTML = `
     <div class="stats-row">
-      <div class="stat-card"><div class="value">${stats.totalDiscovered}</div><div class="label">Jobs discovered</div></div>
-      <div class="stat-card clickable" data-nav="#/review"><div class="value">${stats.counts.discovered || 0}</div><div class="label">Awaiting review</div></div>
-      <div class="stat-card clickable" data-nav="#/tracker/applied_or_later"><div class="value">${stats.submitted}</div><div class="label">Applied</div></div>
-      <div class="stat-card clickable" data-nav="#/tracker/interviewing_or_later"><div class="value">${stats.interviewed}</div><div class="label">Interviewing</div></div>
-      <div class="stat-card"><div class="value">${stats.offers}</div><div class="label">Offers</div></div>
+      <div class="stat-card"><div class="stat-icon">📋</div><div class="value">${stats.totalDiscovered}</div><div class="label">Jobs discovered</div></div>
+      <div class="stat-card clickable" data-nav="#/review"><div class="stat-icon">🕵️</div><div class="value">${stats.counts.discovered || 0}</div><div class="label">Awaiting review</div></div>
+      <div class="stat-card clickable" data-nav="#/tracker/applied_or_later"><div class="stat-icon">📨</div><div class="value">${stats.submitted}</div><div class="label">Applied</div></div>
+      <div class="stat-card clickable" data-nav="#/tracker/interviewing_or_later"><div class="stat-icon">🎤</div><div class="value">${stats.interviewed}</div><div class="label">Interviewing</div></div>
+      <div class="stat-card"><div class="stat-icon">🏆</div><div class="value">${stats.offers}</div><div class="label">Offers</div></div>
     </div>
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -400,7 +401,10 @@ async function renderTracker(initialFilter) {
             .join("")}
         </select>
       </div>
-      <button id="add-job-manually" class="secondary">+ Add job manually</button>
+      <div>
+        <button id="find-missing-postings" class="secondary">🔎 Find missing postings</button>
+        <button id="add-job-manually" class="secondary">+ Add job manually</button>
+      </div>
     </div>
     <div class="card"><table id="tracker-table">
       <thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Score</th><th>Discovered</th><th>Applied</th><th></th></tr></thead>
@@ -442,6 +446,44 @@ async function renderTracker(initialFilter) {
   };
   document.getElementById("status-filter").addEventListener("change", load);
   document.getElementById("add-job-manually").addEventListener("click", () => openAddJobModal(load));
+
+  // Runs the automatic posting lookup (server/postingResolver.js) against
+  // every job in the Tracker still missing a URL, one at a time, so it's
+  // one click instead of opening each job individually. Best-effort by
+  // nature — only finds a posting for companies actually on Greenhouse,
+  // Lever, Ashby, or Recruitee with a slug that matches their name; jobs on
+  // Workday/iCIMS/a custom careers site etc. will still need a link pasted
+  // in manually, and this button says so plainly in the summary.
+  document.getElementById("find-missing-postings").addEventListener("click", async (e) => {
+    const btn = e.target;
+    const allJobs = await api("/jobs");
+    const missing = allJobs.filter((j) => !j.url && j.status !== "dismissed");
+    if (!missing.length) {
+      alert("Every job in your Tracker already has a posting link.");
+      return;
+    }
+    btn.disabled = true;
+    let found = 0;
+    for (let i = 0; i < missing.length; i++) {
+      btn.textContent = `Looking… (${i + 1}/${missing.length})`;
+      try {
+        const result = await api(`/jobs/${missing[i].id}/find-posting`, { method: "POST" });
+        if (result.found) found++;
+      } catch (err) {
+        console.error(`Find-posting failed for ${missing[i].title} @ ${missing[i].company}:`, err.message);
+      }
+    }
+    btn.disabled = false;
+    btn.textContent = "🔎 Find missing postings";
+    alert(
+      `Found ${found} of ${missing.length} missing posting${missing.length === 1 ? "" : "s"}.` +
+        (found < missing.length
+          ? " The rest aren't on Greenhouse, Lever, Ashby, or Recruitee with a name match — open each job and paste the link in yourself under Posting details."
+          : "")
+    );
+    load();
+  });
+
   load();
 }
 
@@ -682,12 +724,11 @@ async function openJobDetail(id) {
 // ---------- Settings ----------
 async function renderSettings() {
   main.innerHTML = `<h2>Settings</h2><div id="settings-body">Loading…</div>`;
-  const [settings, profile, criteria, cvUpload] = await Promise.all([api("/settings"), api("/profile"), api("/criteria"), api("/profile/cv-upload")]);
+  const settings = await api("/settings");
   const isScheduled = settings.cadence && settings.cadence !== "manual";
   const frequency = isScheduled ? settings.cadence : "daily";
   const timeValue = `${String(settings.cadenceHourLocal ?? 7).padStart(2, "0")}:${String(settings.cadenceMinuteLocal ?? 0).padStart(2, "0")}`;
   const aiProvider = settings.aiProvider || "none";
-  const aiConfigured = Boolean(aiProvider !== "none" && settings.aiApiKey);
   const emailInbox = settings.emailInbox || {};
   const AI_PROVIDER_INFO = {
     none: { placeholder: "", hint: "" },
@@ -736,40 +777,7 @@ async function renderSettings() {
       <div style="margin-top:16px;"><button id="save-settings">Save settings</button><span id="settings-msg" class="hint"></span></div>
     </div>
 
-    <div class="card">
-      <h3>Baseline CV file</h3>
-      <p class="hint">Upload your CV (PDF or Word/.docx). This is what your profile gets auto-filled from, and what every tailored CV/cover letter is generated relative to.</p>
-      ${
-        cvUpload
-          ? `<p><strong>${esc(cvUpload.originalFilename)}</strong> · uploaded ${fmtDate(cvUpload.uploadedAt)}
-             &nbsp; <a href="/api/profile/cv-upload/view" target="_blank">View</a>
-             &nbsp;·&nbsp; <a href="/api/profile/cv-upload/download" target="_blank">Download</a>
-             &nbsp;·&nbsp; <a href="#" id="remove-cv">Remove</a></p>
-             ${
-               cvUpload.mimetype === "application/pdf"
-                 ? `<iframe src="/api/profile/cv-upload/view" style="width:100%; height:420px; border:1px solid var(--border); border-radius:8px;"></iframe>`
-                 : `<p class="hint">Inline preview isn't available for Word files in-browser — use View/Download above (View will prompt your system's Word viewer).</p>`
-             }
-             <div style="margin-top:12px;">
-               <button id="import-from-cv" ${aiConfigured ? "" : "disabled"}>Auto-fill profile from this CV (AI)</button>
-               ${aiConfigured ? "" : `<span class="hint">Add an AI provider + API key under Advanced settings to enable this (a free one works fine).</span>`}
-             </div>`
-          : `<p class="empty">No CV uploaded yet.</p>`
-      }
-      <div style="margin-top:12px;">
-        <input type="file" id="cv-file-input" accept=".pdf,.docx" />
-        <button id="upload-cv" class="secondary">Upload</button>
-        <span id="cv-upload-msg" class="hint"></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3>Criteria profiles</h3>
-        <button id="add-criteria">+ Add profile</button>
-      </div>
-      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || `<p class="empty">No criteria profiles yet — add one to start discovering jobs.</p>`}</div>
-    </div>
+    <p class="hint" style="margin: -8px 0 18px;">Your CV upload, experience bank, and job-search criteria profiles have moved to the <a href="#/me">Me</a> tab.</p>
 
     <details class="card advanced-settings" id="advanced-settings">
       <summary>Advanced settings</summary>
@@ -818,7 +826,7 @@ async function renderSettings() {
 
       <label>Cover letter instructions for the AI</label>
       <textarea id="coverLetterInstructions" placeholder="e.g. keep it under 200 words; lead with enthusiasm for the mission before the skills match; slightly more formal tone for corporate/enterprise companies">${esc(settings.coverLetterInstructions || "")}</textarea>
-      <p class="hint">Free text — tone, length, structure, whatever preferences you want the AI-assisted cover letter drafter (see "Optional: AI-assisted scoring &amp; cover letter drafting" above) to keep in mind for every letter it writes. Only used when an AI provider is configured above; template mode (no provider) ignores it. This is separate from the "Experience bank" on your Candidate Profile below, which is source material, not instructions.</p>
+      <p class="hint">Free text — tone, length, structure, whatever preferences you want the AI-assisted cover letter drafter (see "Optional: AI-assisted scoring &amp; cover letter drafting" above) to keep in mind for every letter it writes. Only used when an AI provider is configured above; template mode (no provider) ignores it. This is separate from the "Experience bank" on the <a href="#/me">Me</a> tab, which is source material, not instructions.</p>
 
       <div class="section-title">Optional: LinkedIn digest import</div>
       <p class="hint">Since LinkedIn has no public jobs API and scraping it breaks their terms of service, this app never touches linkedin.com directly. Instead, it can read LinkedIn's own "jobs for you" alert emails from an inbox you connect below, and try to resolve each listing to the employer's own Greenhouse/Lever posting (falling back to the LinkedIn link when it can't). Needs a Gmail-style <strong>App password</strong> (Google Account &rarr; Security &rarr; App passwords) — not your real password.</p>
@@ -846,17 +854,6 @@ async function renderSettings() {
           <input type="text" id="emailInboxSender" value="${esc(emailInbox.senderFilter || "jobs-noreply@linkedin.com")}" />
         </div>
       </div>
-
-      <div class="section-title">Candidate profile (CV data)</div>
-
-      <label>Experience bank</label>
-      <textarea id="experience-bank" style="min-height:140px;" placeholder="A running scratchpad — paste in extra achievements, projects, stats, or stories as you think of them, even ones that aren't on your CV yet. Doesn't need to be tidy. The AI can pull specific, concrete examples from here when tailoring a CV or cover letter for a job that calls for something your structured CV entries don't cover.">${esc((profile && profile.experienceBank) || "")}</textarea>
-      <p class="hint">Free text, keep adding to it over time — it's a pool of extra true examples for the AI to draw on (only used when an AI provider is configured in Advanced settings), not something that gets used word-for-word automatically. Saved separately from the JSON profile below, so you don't need to touch that to update this.</p>
-      <div style="margin-top:8px;"><button id="save-experience-bank" class="secondary">Save experience bank</button><span id="experience-bank-msg" class="hint"></span></div>
-
-      <p class="hint" style="margin-top:20px;">The rest of your profile is edited as JSON for now, see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
-      <textarea id="profile-json" style="min-height:260px; font-family: monospace; font-size:12px;">${esc(JSON.stringify(profile, null, 2))}</textarea>
-      <div style="margin-top:8px; display:flex; justify-content:flex-end; align-items:center; gap:10px;"><span id="profile-msg" class="hint"></span><button id="save-profile">Save CV JSON</button></div>
 
       <div style="margin-top:16px;"><button id="save-settings-advanced">Save settings</button><span id="settings-msg-advanced" class="hint"></span></div>
     </details>
@@ -919,6 +916,88 @@ async function renderSettings() {
   }
   document.getElementById("save-settings").addEventListener("click", () => saveSettings(document.getElementById("settings-msg")));
   document.getElementById("save-settings-advanced").addEventListener("click", () => saveSettings(document.getElementById("settings-msg-advanced")));
+}
+
+// ---------- Me (candidate profile: CV, experience bank, criteria) ----------
+// Everything that describes *you* — as opposed to Settings, which is about
+// how the automation runs — lives here: your baseline CV file, the
+// experience-bank scratchpad the AI draws examples from, your job-search
+// criteria profiles, and the full CV data as JSON.
+async function renderMe() {
+  main.innerHTML = `<h2>Me</h2><div id="me-body">Loading…</div>`;
+  const [settings, profile, criteria, cvUpload] = await Promise.all([
+    api("/settings"),
+    api("/profile"),
+    api("/criteria"),
+    api("/profile/cv-upload"),
+  ]);
+  const aiConfigured = Boolean(settings.aiProvider && settings.aiProvider !== "none" && settings.aiApiKey);
+
+  document.getElementById("me-body").innerHTML = `
+    <div class="card cv-card">
+      <h3>Baseline CV file</h3>
+      <p class="hint">Upload your CV (PDF or Word/.docx). This is what your profile gets auto-filled from, and what every tailored CV/cover letter is generated relative to.</p>
+      ${
+        cvUpload
+          ? `
+        <div class="cv-file-row">
+          <div class="cv-file-icon">📄</div>
+          <div class="cv-file-info">
+            <div class="cv-file-name">${esc(cvUpload.originalFilename)}</div>
+            <div class="hint">Uploaded ${fmtDate(cvUpload.uploadedAt)}</div>
+          </div>
+          <div class="cv-file-actions">
+            <a class="btn-pill" href="/api/profile/cv-upload/view" target="_blank">View</a>
+            <a class="btn-pill" href="/api/profile/cv-upload/download" target="_blank">Download</a>
+            <a class="btn-pill danger" href="#" id="remove-cv">Remove</a>
+          </div>
+        </div>
+        ${
+          cvUpload.mimetype === "application/pdf"
+            ? `<iframe src="/api/profile/cv-upload/view" style="width:100%; height:420px; border:1px solid var(--border); border-radius:8px; margin-top:14px;"></iframe>`
+            : `<p class="hint" style="margin-top:10px;">Inline preview isn't available for Word files in-browser — use View/Download above (View will prompt your system's Word viewer).</p>`
+        }
+        <div class="cv-autofill-row">
+          <button id="import-from-cv" ${aiConfigured ? "" : "disabled"}>✨ Auto-fill profile from this CV (AI)</button>
+          ${aiConfigured ? "" : `<span class="hint">Add an AI provider + API key under Settings → Advanced to enable this (a free one works fine).</span>`}
+        </div>`
+          : `<div class="cv-empty">
+          <div class="cv-empty-icon">📄</div>
+          <p>No CV uploaded yet — add one below to get started.</p>
+        </div>`
+      }
+      <div class="cv-upload-row">
+        <input type="file" id="cv-file-input" accept=".pdf,.docx" />
+        <button id="upload-cv" class="secondary">${cvUpload ? "Replace file" : "Upload"}</button>
+        <span id="cv-upload-msg" class="hint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Experience bank</h3>
+      <label style="margin-top:0;">A running scratchpad of extra examples</label>
+      <textarea id="experience-bank" style="min-height:140px;" placeholder="A running scratchpad — paste in extra achievements, projects, stats, or stories as you think of them, even ones that aren't on your CV yet. Doesn't need to be tidy. The AI can pull specific, concrete examples from here when tailoring a CV or cover letter for a job that calls for something your structured CV entries don't cover.">${esc(
+        (profile && profile.experienceBank) || ""
+      )}</textarea>
+      <p class="hint">Free text, keep adding to it over time — it's a pool of extra true examples for the AI to draw on (only used when an AI provider is configured in Settings → Advanced), not something that gets used word-for-word automatically. Saved separately from the JSON profile below, so you don't need to touch that to update this.</p>
+      <div style="margin-top:8px;"><button id="save-experience-bank" class="secondary">Save experience bank</button><span id="experience-bank-msg" class="hint"></span></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>Criteria profiles</h3>
+        <button id="add-criteria">+ Add profile</button>
+      </div>
+      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || `<p class="empty">No criteria profiles yet — add one to start discovering jobs.</p>`}</div>
+    </div>
+
+    <div class="card">
+      <h3>Candidate profile (full JSON)</h3>
+      <p class="hint">The rest of your profile is edited as JSON for now — see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
+      <textarea id="profile-json" style="min-height:260px; font-family: monospace; font-size:12px;">${esc(JSON.stringify(profile, null, 2))}</textarea>
+      <div style="margin-top:8px; display:flex; justify-content:flex-end; align-items:center; gap:10px;"><span id="profile-msg" class="hint"></span><button id="save-profile">Save CV JSON</button></div>
+    </div>
+  `;
 
   document.getElementById("save-profile").addEventListener("click", async () => {
     const msg = document.getElementById("profile-msg");
@@ -962,7 +1041,7 @@ async function renderSettings() {
     msg.textContent = "Uploading…";
     try {
       await apiUpload("/profile/cv-upload", fd);
-      renderSettings();
+      renderMe();
     } catch (err) {
       msg.textContent = `Upload failed: ${err.message}`;
     }
@@ -974,7 +1053,7 @@ async function renderSettings() {
       e.preventDefault();
       if (!confirm("Remove your uploaded CV file?")) return;
       await api("/profile/cv-upload", { method: "DELETE" });
-      renderSettings();
+      renderMe();
     });
   }
 
@@ -986,15 +1065,14 @@ async function renderSettings() {
       const msg = document.getElementById("cv-upload-msg");
       try {
         const draft = await api("/profile/import-from-cv", { method: "POST" });
-        document.getElementById("advanced-settings").open = true;
         document.getElementById("profile-json").value = JSON.stringify(draft, null, 2);
-        msg.textContent = "Draft imported under Advanced settings → Candidate profile — review it, then hit \"Save profile\" to apply it.";
+        msg.textContent = 'Draft imported into the "Candidate profile" JSON box below — review it, then hit "Save CV JSON" to apply it.';
         document.getElementById("profile-json").scrollIntoView({ behavior: "smooth" });
       } catch (err) {
         msg.textContent = `Import failed: ${err.message}`;
       }
       importBtn.disabled = false;
-      importBtn.textContent = "Auto-fill profile from this CV (AI)";
+      importBtn.textContent = "✨ Auto-fill profile from this CV (AI)";
     });
   }
 }
@@ -1022,7 +1100,7 @@ function attachCriteriaHandlers() {
     btn.addEventListener("click", async () => {
       if (!confirm("Delete this criteria profile?")) return;
       await api(`/criteria/${btn.dataset.deleteCriteria}`, { method: "DELETE" });
-      renderSettings();
+      renderMe();
     })
   );
 }
@@ -1147,7 +1225,7 @@ function openCriteriaEditor(c) {
     if (isNew) await api("/criteria", { method: "POST", body: JSON.stringify(payload) });
     else await api(`/criteria/${c.id}`, { method: "PUT", body: JSON.stringify(payload) });
     closeModal();
-    renderSettings();
+    renderMe();
   });
 }
 

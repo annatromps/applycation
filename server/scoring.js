@@ -225,6 +225,7 @@ const EASE_ATS_HINTS = [
   { re: /lever\.co/i, delta: 12, reason: "Hosted on Lever — usually a quick, standard application form" },
   { re: /ashbyhq\.com/i, delta: 10, reason: "Hosted on Ashby — usually a quick, standard application form" },
   { re: /workable\.com/i, delta: 10, reason: "Hosted on Workable — usually a quick, standard application form" },
+  { re: /recruitee\.com/i, delta: 10, reason: "Hosted on Recruitee — usually a quick, standard application form" },
 ];
 
 function scoreSubmissionEase(job) {
