@@ -319,7 +319,7 @@ async function renderReview() {
     <div class="list-item job-row">
       ${companyLogoHtml(j.company, 44)}
       <div class="job-row-main">
-        <h4>${esc(j.company)} <span class="score ${scoreClass(j.score)}">Score ${j.score}</span></h4>
+        <h4>${esc(j.company)} <span class="score ${scoreClass(j.score)}">Score ${j.score}/100</span></h4>
         <div class="meta">${esc(j.title)} · ${esc(j.location || "—")} · via ${esc(j.source)} · discovered ${fmtDate(j.discoveredAt)}
           ${j.url ? `&nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
         </div>
@@ -407,7 +407,7 @@ async function renderTracker(initialFilter) {
       </div>
     </div>
     <div class="card"><table id="tracker-table">
-      <thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Score</th><th>Discovered</th><th>Applied</th><th></th></tr></thead>
+      <thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Score /100</th><th>Discovered</th><th>Applied</th><th></th></tr></thead>
       <tbody id="tracker-body"><tr><td colspan="7">Loading…</td></tr></tbody>
     </table></div>
   `;
@@ -558,7 +558,7 @@ async function openJobDetail(id) {
         <div class="meta">${esc(job.title)} · ${esc(job.location || "—")}${job.url ? ` · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}</div>
       </div>
     </div>
-    <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> ${job.score != null ? `&nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}</span>` : ""}</p>
+    <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> ${job.score != null ? `&nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}/100</span>` : ""}</p>
     ${ratingsDetailHtml(job)}
     ${job.materials && job.materials.reviewQuestions && job.materials.reviewQuestions.length ? reviewQuestionsHtml(job.materials.reviewQuestions) : ""}
     ${reviewAnswerBoxHtml(job)}
