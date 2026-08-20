@@ -8,7 +8,7 @@
 
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
-const { JOB_ALERT_SUBJECT_HINT } = require("./parseDigest");
+const { callAI, isAIConfigured } = require("./../ai/client");
 
 // senderFilter is a single string in settings, but supports multiple
 // comma-separated addresses/domains so one inbox + app password can watch
@@ -121,13 +121,30 @@ async function testConnection(settings) {
 // fetches only envelopes (sender + subject, never the body), and never
 // marks anything read or touches flags. Capped to a recent window and
 // message count so a large inbox doesn't turn one scan into a long wait.
-// Candidate quality is a cheap heuristic (job-ish wording in the subject —
-// see parseDigest.js's JOB_ALERT_SUBJECT_HINT), not a guarantee — that's
-// the whole point of surfacing these as suggestions for you to confirm or
-// dismiss rather than adding them automatically.
+//
+// Two-stage filtering for candidate quality:
+//   1. A subject-line regex (below) as a cheap first pass, purely to avoid
+//      running every single sender past the (slower, and if AI-assisted,
+//      billed) second stage.
+//   2. If an AI provider is configured, a batched classification call over
+//      whatever survives stage 1 — the regex alone lets through a lot of
+//      retail/marketing noise (e.g. "Cat Socks: Purr-fect for You!" matches
+//      naive "for you" wording), and AI is much better at telling an actual
+//      job-alert digest apart from unrelated bulk mail that just happens to
+//      share some vocabulary. Falls back to the stage-1 regex list alone
+//      when no provider is configured, or if the AI call fails — a noisier
+//      list is better than none, especially since nothing here gets added
+//      without you explicitly confirming it anyway.
 const SUGGEST_LOOKBACK_DAYS = 90;
 const SUGGEST_MAX_MESSAGES = 400;
 const SUGGEST_MAX_CANDIDATES = 15;
+
+// Deliberately narrower than parseDigest.js's JOB_ALERT_SUBJECT_HINT (which
+// is paired with a body-link check there, so it can afford to be broad).
+// Here the subject line is all there is, so generic personalization phrases
+// like "for you" or "recommended" are excluded — they're exactly what was
+// producing false positives from newsletters/retail mail in practice.
+const SUGGEST_SUBJECT_HINT = /\b(jobs?|careers?|hiring|vacan\w*|opportunit\w*|new roles?)\b/i;
 
 function domainOf(address) {
   const at = String(address || "").lastIndexOf("@");
@@ -137,6 +154,25 @@ function domainOf(address) {
 function alreadyWatched(address, senders) {
   const a = String(address || "").toLowerCase();
   return senders.some((s) => a.includes(s.toLowerCase()));
+}
+
+async function classifyCandidatesWithAI(candidates, settings) {
+  if (!isAIConfigured(settings) || !candidates.length) return { candidates, aiFiltered: false };
+  const prompt = [
+    "Below is a list of email sender domains and example subject lines from emails they sent to one inbox. For each domain, decide whether it looks like an automated JOB-ALERT / JOB-RECOMMENDATION digest from a job board, recruiter, or company careers page (e.g. \"5 new jobs matching your search\", \"Jobs recommended for you\", \"New openings at...\") as opposed to unrelated marketing, retail, loyalty programs, surveys, newsletters, or other bulk email that just happens to share a word or two.",
+    'Return ONLY a JSON array of the domain strings that ARE genuine job-alert senders, no commentary, no markdown fences — e.g. ["indeed.com", "wellfound.com"]. Return [] if none qualify. When genuinely unsure about a domain, leave it OUT rather than guessing yes — a human reviews this list before anything is added, so a missed real one is a smaller cost than adding noise.',
+    "",
+    ...candidates.map((c) => `Domain: ${c.domain}\nExample subject(s): ${c.examples.join(" | ")}`),
+  ].join("\n");
+  try {
+    const raw = await callAI(settings, { prompt, maxTokens: 500 });
+    const jsonText = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const keep = new Set(JSON.parse(jsonText));
+    return { candidates: candidates.filter((c) => keep.has(c.domain)), aiFiltered: true };
+  } catch (e) {
+    console.error("[email/inbox] AI classification of sender candidates failed, keeping rule-based results:", e.message);
+    return { candidates, aiFiltered: false };
+  }
 }
 
 async function suggestSenderDomains(settings) {
@@ -167,7 +203,7 @@ async function suggestSenderDomains(settings) {
           const address = from[0] && from[0].address;
           if (!address || alreadyWatched(address, existingSenders)) continue;
           const subject = (msg.envelope && msg.envelope.subject) || "";
-          if (!JOB_ALERT_SUBJECT_HINT.test(subject)) continue;
+          if (!SUGGEST_SUBJECT_HINT.test(subject)) continue;
           const domain = domainOf(address);
           if (!domain) continue;
           if (!byDomain.has(domain)) byDomain.set(domain, { domain, count: 0, examples: [] });
@@ -184,8 +220,10 @@ async function suggestSenderDomains(settings) {
   } finally {
     await client.logout().catch(() => {});
   }
-  const candidates = [...byDomain.values()].sort((a, b) => b.count - a.count).slice(0, SUGGEST_MAX_CANDIDATES);
-  return { ok: true, scanned, candidates };
+  let candidates = [...byDomain.values()].sort((a, b) => b.count - a.count).slice(0, SUGGEST_MAX_CANDIDATES);
+  const classified = await classifyCandidatesWithAI(candidates, settings);
+  candidates = classified.candidates;
+  return { ok: true, scanned, candidates, aiFiltered: classified.aiFiltered };
 }
 
 module.exports = { fetchNewLinkedInDigests, testConnection, suggestSenderDomains, parseSenderList };

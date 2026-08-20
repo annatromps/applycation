@@ -57,7 +57,10 @@ router.post("/email-inbox/test", async (req, res) => {
 // alerts you haven't added yet — see server/email/inbox.js's
 // suggestSenderDomains for the actual heuristic and its limits. Tests
 // against the form's current credentials (same masked-password fallback as
-// /email-inbox/test above), so you don't need to save first.
+// /email-inbox/test above), so you don't need to save first. Passes along
+// the already-saved AI provider settings (not overridable from this form)
+// so suggestSenderDomains can use AI classification to weed out
+// marketing/newsletter false positives when a provider is configured.
 router.post("/email-inbox/suggest-domains", async (req, res) => {
   const data = await db.read();
   const incoming = (req.body && req.body.emailInbox) || {};
@@ -65,7 +68,7 @@ router.post("/email-inbox/suggest-domains", async (req, res) => {
   if (!incoming.appPassword || incoming.appPassword === "••••••••") {
     effective.appPassword = data.settings.emailInbox.appPassword;
   }
-  const result = await suggestSenderDomains({ emailInbox: effective });
+  const result = await suggestSenderDomains({ ...data.settings, emailInbox: effective });
   res.json(result);
 });
 

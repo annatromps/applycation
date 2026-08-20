@@ -1146,7 +1146,7 @@ async function renderSettings() {
       } else if (!result.candidates.length) {
         alert(`Scanned ${result.scanned} recent email(s) — nothing that looked like a new job-alert sender turned up. You're probably already watching everything relevant.`);
       } else {
-        openSenderSuggestionsModal(result.candidates, result.scanned);
+        openSenderSuggestionsModal(result.candidates, result.scanned, result.aiFiltered);
       }
     } catch (err) {
       alert(`Couldn't scan your inbox: ${err.message}`);
@@ -1162,11 +1162,15 @@ async function renderSettings() {
 // updates the sender-filter text field on the Settings page underneath —
 // you still need to hit "Save settings" there to persist it, same as any
 // other field on that page.
-function openSenderSuggestionsModal(candidates, scanned) {
+function openSenderSuggestionsModal(candidates, scanned, aiFiltered) {
   openModal(`
     <span class="close-x" id="close-modal">&times;</span>
     <h3>Job-alert senders found in your inbox</h3>
-    <p class="hint">Scanned ${scanned} recent email(s). Check the ones that are actually job alerts — anything unchecked is left alone.</p>
+    <p class="hint">Scanned ${scanned} recent email(s). ${
+      aiFiltered
+        ? "✨ AI-filtered to weed out marketing/newsletter noise — still worth a quick look before adding."
+        : "Matched on subject wording only (no AI provider configured, so this list is noisier — set one up in Settings above for smarter filtering)."
+    } Check the ones that are actually job alerts — anything unchecked is left alone.</p>
     <div class="sender-suggestion-list">
       ${candidates
         .map(
