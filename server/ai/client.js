@@ -62,14 +62,49 @@ function isPostingSearchConfigured(settings) {
   return isAnthropicSearchConfigured(settings) || isGeminiSearchConfigured(settings);
 }
 
+// Every provider call below goes through this instead of a bare fetch().
+// None of the raw fetch() calls had a timeout — if a provider's API ever
+// hangs (slow response, network stall, a routing issue) rather than
+// cleanly erroring, the request would just hang forever with no way for
+// anything upstream to notice. That's a real bug, not a hypothetical one:
+// PATCH /jobs/:id chains straight through scoreJobFully() into one of
+// these calls whenever you edit a job's posting details (see routes/jobs.js)
+// — a hung AI call there meant the whole save silently never completed, url
+// included, even though url is otherwise set unconditionally before the
+// AI step runs. Callers already treat a thrown error from these functions
+// as "skip the AI-assisted step, don't fail the whole operation" (see the
+// try/catches in scoring.js/jobScoring.js), so timing out and throwing here
+// is exactly as safe as any other failure mode already handled — it just
+// bounds how long that failure takes to surface.
+const AI_REQUEST_TIMEOUT_MS = 25000;
+
+async function fetchWithTimeout(url, opts, providerLabel) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } catch (e) {
+    if (e.name === "AbortError") {
+      throw new Error(`${providerLabel} request timed out after ${AI_REQUEST_TIMEOUT_MS / 1000}s.`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callAnthropic({ apiKey, model, prompt, maxTokens, tools }) {
   const body = { model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] };
   if (tools && tools.length) body.tools = tools;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify(body),
-  });
+  const res = await fetchWithTimeout(
+    "https://api.anthropic.com/v1/messages",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(body),
+    },
+    "Anthropic"
+  );
   if (!res.ok) throw new Error(`Anthropic API request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   // Non-text content blocks (server_tool_use, web_search_tool_result) have
@@ -80,22 +115,30 @@ async function callAnthropic({ apiKey, model, prompt, maxTokens, tools }) {
 
 // OpenAI-compatible chat completions endpoint — works for Groq unchanged.
 async function callGroq({ apiKey, model, prompt, maxTokens }) {
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
-  });
+  const res = await fetchWithTimeout(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
+    },
+    "Groq"
+  );
   if (!res.ok) throw new Error(`Groq API request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   return ((data.choices || [])[0]?.message?.content || "").trim();
 }
 
 async function callGemini({ apiKey, model, prompt, maxTokens }) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: maxTokens } }),
-  });
+  const res = await fetchWithTimeout(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: maxTokens } }),
+    },
+    "Gemini"
+  );
   if (!res.ok) throw new Error(`Gemini API request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const parts = (data.candidates || [])[0]?.content?.parts || [];
@@ -117,16 +160,20 @@ async function callGemini({ apiKey, model, prompt, maxTokens }) {
 // cross-check a claimed URL against what was really found rather than
 // trusting the model's prose alone.
 async function callGeminiWithSearch({ apiKey, model, prompt, maxTokens }) {
-  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      tools: [{ type: "google_search" }],
-      generation_config: { max_output_tokens: maxTokens },
-    }),
-  });
+  const res = await fetchWithTimeout(
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        tools: [{ type: "google_search" }],
+        generation_config: { max_output_tokens: maxTokens },
+      }),
+    },
+    "Gemini"
+  );
   if (!res.ok) throw new Error(`Gemini Interactions API request failed (${res.status}): ${(await res.text()).slice(0, 500)}`);
   const data = await res.json();
   const steps = data.steps || [];
