@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const db = require("./db");
 const { discoverJobs } = require("./sources");
-const { scoreJob, scoreJobWithAI, buildFeedbackContext } = require("./scoring");
+const { scoreJob, scoreJobWithAI, buildFeedbackContext, scoreSubmissionEaseFull } = require("./scoring");
 const { buildMaterialsForJob } = require("./docgen/materials");
 const { sendNotification } = require("./notify");
 const { isAIConfigured } = require("./ai/client");
@@ -106,6 +106,15 @@ async function runDiscoveryCycle() {
       const finalScore = Math.round((candidateFitScore + roleAppealScore) / 2);
       if (finalScore < (data.settings.minScoreToSurface ?? 55)) continue;
 
+      // Submission-ease score is independent of criteria matching (it's about
+      // the posting/process itself, not fit) — computed once per surfaced job.
+      let easeFields = { submissionEaseScore: null, easeReasons: [] };
+      try {
+        easeFields = await scoreSubmissionEaseFull(c.job, data.settings);
+      } catch (e) {
+        console.error(`[discovery] Ease scoring failed for "${c.job.title}":`, e.message);
+      }
+
       const record = {
         id: crypto.randomUUID(),
         ...c.job,
@@ -114,6 +123,8 @@ async function runDiscoveryCycle() {
         score: finalScore,
         candidateFitScore, // 0-100 — "how good a match am I for its requirements"
         roleAppealScore, // 0-100 — "how good does this look for me" (perks/salary/fit)
+        submissionEaseScore: easeFields.submissionEaseScore, // 0-100 — "how quick/easy is this to actually submit"
+        easeReasons: easeFields.easeReasons,
         scoreReasons: c.reasons,
         reasonsByCategory: c.reasonsByCategory,
         discoveredAt: new Date().toISOString(),

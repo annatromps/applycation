@@ -4,8 +4,7 @@ const router = express.Router();
 const db = require("./../db");
 const { runDiscoveryCycle } = require("./../discovery");
 const { buildMaterialsForJob } = require("./../docgen/materials");
-const { scoreJob, scoreJobWithAI, buildFeedbackContext } = require("./../scoring");
-const { isAIConfigured } = require("./../ai/client");
+const { scoreJobFully } = require("./../jobScoring");
 
 const VALID_STATUSES = [
   "discovered", "reviewing", "approved", "materials_ready",
@@ -46,13 +45,13 @@ router.get("/:id", async (req, res) => {
 
 // Manually add a job found outside the automated sources (e.g. one you
 // found yourself on a board this app doesn't search, or an application you
-// already had in flight before you started using it). Scored against your
-// active criteria profile(s) exactly like an auto-discovered job would be
-// (best-matching profile wins) — using whatever fields you gave it, so a
-// job added with just a title/company still gets a real, if thinner, score
-// rather than a permanent "–/10". Only stays null if you have no active
-// criteria profile configured at all — there's genuinely nothing to score
-// it against then.
+// already had in flight before you started using it). Scored — on every
+// dimension, match AND submission ease — exactly like an auto-discovered
+// job would be, automatically, using whatever fields you gave it, so a job
+// added with just a title/company still gets a real, if thinner, score
+// rather than a permanent "–/10". See server/jobScoring.js for the shared
+// scoring logic (also used when you edit a job's details, and to backfill
+// older jobs at startup) — there's no manual "rescore" step anywhere.
 router.post("/", async (req, res) => {
   const { title, company, location, url, status, notes, salary, description, source } = req.body || {};
   if (!title || !company) {
@@ -75,59 +74,7 @@ router.post("/", async (req, res) => {
     url: url || "",
   };
 
-  let scoreFields = {
-    matchedCriteriaId: null,
-    matchedCriteriaName: null,
-    score: null,
-    candidateFitScore: null,
-    roleAppealScore: null,
-    scoreReasons: [],
-    reasonsByCategory: { candidateFit: [], roleAppeal: [] },
-  };
-
-  const activeProfiles = (data.criteriaProfiles || []).filter((c) => c.active !== false);
-  if (activeProfiles.length) {
-    // Score against every active profile, keep whichever fits best — same
-    // "best matching profile wins" idea as discovery, just for one job.
-    let best = null;
-    for (const criteria of activeProfiles) {
-      const r = scoreJob(jobForScoring, criteria);
-      if (r.hardFail) continue;
-      if (!best || r.score > best.result.score) best = { criteria, result: r };
-    }
-    if (best) {
-      let { score, candidateFitScore, roleAppealScore, reasons, reasonsByCategory } = best.result;
-      const useAI =
-        isAIConfigured(data.settings) &&
-        Boolean((best.criteria.aiPreferences || "").trim()) &&
-        Boolean(description && description.trim());
-      if (useAI) {
-        try {
-          const feedbackContext = buildFeedbackContext(data.jobs);
-          const ai = await scoreJobWithAI(jobForScoring, best.criteria, data.settings, feedbackContext);
-          candidateFitScore = Math.round((candidateFitScore + ai.candidateFitScore) / 2);
-          roleAppealScore = Math.round((roleAppealScore + ai.roleAppealScore) / 2);
-          reasonsByCategory = {
-            candidateFit: [...reasonsByCategory.candidateFit, ...ai.candidateFitReasons],
-            roleAppeal: [...reasonsByCategory.roleAppeal, ...ai.roleAppealReasons],
-          };
-          reasons = [...reasonsByCategory.candidateFit, ...reasonsByCategory.roleAppeal];
-          score = Math.round((candidateFitScore + roleAppealScore) / 2);
-        } catch (e) {
-          console.error(`[jobs] AI scoring failed for manually-added "${title}":`, e.message);
-        }
-      }
-      scoreFields = {
-        matchedCriteriaId: best.criteria.id,
-        matchedCriteriaName: best.criteria.name,
-        score,
-        candidateFitScore,
-        roleAppealScore,
-        scoreReasons: reasons,
-        reasonsByCategory,
-      };
-    }
-  }
+  const scoreFields = await scoreJobFully(jobForScoring, data);
 
   const record = {
     id: crypto.randomUUID(),
@@ -169,6 +116,47 @@ router.post("/", async (req, res) => {
   res.status(201).json({ ...rest, materials: publicMaterials(materials) });
 });
 
+// Edits the handful of fields a manually-added job often starts out missing
+// (the real posting link, its description/"summary", location, salary) —
+// e.g. once you've found the actual listing and want to paste its details
+// in. Re-scores automatically as part of the same request whenever any of
+// those fields change, so a new description immediately feeds into both the
+// match score and the submission-ease score — no separate rescore step.
+router.patch("/:id", async (req, res) => {
+  const { url, description, location, salary } = req.body || {};
+  const data = await db.read();
+  const job = data.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "not found" });
+
+  const changedScoringInputs =
+    (url !== undefined && url !== job.url) ||
+    (description !== undefined && description !== job.description) ||
+    (location !== undefined && location !== job.location) ||
+    (salary !== undefined && salary !== job.salary);
+
+  if (url !== undefined) job.url = url;
+  if (description !== undefined) job.description = description;
+  if (location !== undefined) job.location = location;
+  if (salary !== undefined) job.salary = salary;
+
+  if (changedScoringInputs) {
+    const jobForScoring = {
+      title: job.title,
+      company: job.company,
+      location: job.location || "",
+      remote: Boolean(job.remote),
+      salary: job.salary || "",
+      description: job.description || "",
+      url: job.url || "",
+    };
+    Object.assign(job, await scoreJobFully(jobForScoring, data));
+  }
+
+  await db.write(data);
+  const { materials, ...rest } = job;
+  res.json({ ...rest, materials: publicMaterials(materials) });
+});
+
 router.post("/discover", async (req, res) => {
   try {
     const added = await runDiscoveryCycle();
@@ -188,10 +176,14 @@ router.post("/:id/status", async (req, res) => {
   if (!job) return res.status(404).json({ error: "not found" });
 
   const now = new Date().toISOString();
+  const APPLIED_OR_LATER = ["submitted", "interviewing", "offer", "rejected", "withdrawn"];
   if (status) {
     job.status = status;
     job.statusHistory.push({ status, at: now, note: note || undefined });
     if (status === "submitted") job.appliedAt = now;
+    // Moving back to a pre-application stage (e.g. correcting a mistaken
+    // "submitted") clears the applied date — it's no longer true.
+    else if (!APPLIED_OR_LATER.includes(status)) job.appliedAt = null;
     if (["offer", "rejected", "withdrawn"].includes(status)) {
       job.outcomeAt = now;
       job.outcome = outcome || status;

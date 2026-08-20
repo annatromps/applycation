@@ -49,12 +49,14 @@ function toTen(score100) {
 function ratingsBadgesHtml(j) {
   const cf = toTen(j.candidateFitScore);
   const ra = toTen(j.roleAppealScore);
-  return `<span class="rating-badge" title="How good a match you are for this job's requirements">🎯 ${cf ?? "–"}/10</span><span class="rating-badge" title="How good this role looks for you — perks, salary, fit to your preferences">✨ ${ra ?? "–"}/10</span>`;
+  const ez = toTen(j.submissionEaseScore);
+  return `<span class="rating-badge" title="How good a match you are for this job's requirements">🎯 ${cf ?? "–"}/10</span><span class="rating-badge" title="How good this role looks for you — perks, salary, fit to your preferences">✨ ${ra ?? "–"}/10</span><span class="rating-badge" title="How quick/easy this application looks to actually submit">⚡ ${ez ?? "–"}/10</span>`;
 }
 
 function ratingsDetailHtml(j) {
   const cf = toTen(j.candidateFitScore);
   const ra = toTen(j.roleAppealScore);
+  const ez = toTen(j.submissionEaseScore);
   const byCat = j.reasonsByCategory || {};
   const list = (arr) =>
     arr && arr.length ? arr.map((r) => `<li>${esc(r)}</li>`).join("") : `<li class="hint">No breakdown available for this job.</li>`;
@@ -70,8 +72,35 @@ function ratingsDetailHtml(j) {
         <div class="rating-value">${ra ?? "–"}/10</div>
         <ul class="reasons">${list(byCat.roleAppeal || (j.roleAppealScore == null ? null : []))}</ul>
       </div>
+      <div class="rating-block">
+        <div class="rating-label">⚡ Easy to submit</div>
+        <div class="rating-value">${ez ?? "–"}/10</div>
+        <ul class="reasons">${list(j.easeReasons)}</ul>
+      </div>
     </div>
   `;
+}
+
+// ---------- Company logo (best-effort — guessed from the company name, not
+// stored data) ----------
+// There's no reliable source of each company's actual domain/logo in the
+// data we have, so this guesses a ".com" domain from the company name and
+// asks Clearbit's free logo endpoint for it. When that guess is wrong (or
+// the company has no Clearbit-indexed logo) the <img> fails to load and the
+// onerror handler swaps in a plain initial-letter avatar instead — so this
+// never blocks on or fabricates anything, it just degrades gracefully.
+function guessCompanyDomain(company) {
+  return `${String(company || "").toLowerCase().replace(/[^a-z0-9]+/g, "")}.com`;
+}
+
+function companyLogoHtml(company, size = 36) {
+  const domain = guessCompanyDomain(company);
+  const initial = esc((String(company || "?").trim().charAt(0) || "?").toUpperCase());
+  return `<span class="company-logo" style="width:${size}px;height:${size}px;">
+    <img src="https://logo.clearbit.com/${esc(domain)}" alt="" loading="lazy"
+      onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+    <span class="company-logo-fallback">${initial}</span>
+  </span>`;
 }
 
 function closeModal() {
@@ -162,9 +191,9 @@ const routes = {
 
 function route() {
   const hash = (location.hash || "#/dashboard").replace("#/", "");
-  const [view] = hash.split("/");
+  const [view, param] = hash.split("/");
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === view));
-  (routes[view] || renderDashboard)();
+  (routes[view] || renderDashboard)(param);
 }
 window.addEventListener("hashchange", route);
 
@@ -176,9 +205,9 @@ async function renderDashboard() {
   document.getElementById("dash-body").innerHTML = `
     <div class="stats-row">
       <div class="stat-card"><div class="value">${stats.totalDiscovered}</div><div class="label">Jobs discovered</div></div>
-      <div class="stat-card"><div class="value">${stats.counts.discovered || 0}</div><div class="label">Awaiting review</div></div>
-      <div class="stat-card"><div class="value">${stats.submitted}</div><div class="label">Applied</div></div>
-      <div class="stat-card"><div class="value">${stats.interviewed}</div><div class="label">Interviewing</div></div>
+      <div class="stat-card clickable" data-nav="#/review"><div class="value">${stats.counts.discovered || 0}</div><div class="label">Awaiting review</div></div>
+      <div class="stat-card clickable" data-nav="#/tracker/applied_or_later"><div class="value">${stats.submitted}</div><div class="label">Applied</div></div>
+      <div class="stat-card clickable" data-nav="#/tracker/interviewing_or_later"><div class="value">${stats.interviewed}</div><div class="label">Interviewing</div></div>
       <div class="stat-card"><div class="value">${stats.offers}</div><div class="label">Offers</div></div>
     </div>
     <div class="card">
@@ -192,6 +221,11 @@ async function renderDashboard() {
     <h3>Recent activity</h3>
     ${recent.length ? recent.map(jobRowHtml).join("") : `<div class="empty">No jobs yet — configure a criteria profile in Settings, then run discovery.</div>`}
   `;
+  document.getElementById("dash-body").querySelectorAll("[data-nav]").forEach((card) => {
+    card.addEventListener("click", () => {
+      location.hash = card.dataset.nav;
+    });
+  });
   document.getElementById("run-discovery").addEventListener("click", async (e) => {
     e.target.disabled = true;
     e.target.textContent = "Running…";
@@ -210,9 +244,15 @@ async function renderDashboard() {
 
 function jobRowHtml(j) {
   return `
-    <div class="list-item" data-job-id="${j.id}">
-      <h4>${esc(j.title)} <span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></h4>
-      <div class="meta">${esc(j.company)} · ${esc(j.location || "—")} · ${ratingsBadgesHtml(j)} · discovered ${fmtDate(j.discoveredAt)}</div>
+    <div class="list-item job-row" data-job-id="${j.id}">
+      ${companyLogoHtml(j.company)}
+      <div class="job-row-main">
+        <h4>${esc(j.company)} <span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></h4>
+        <div class="meta">${esc(j.title)} · ${esc(j.location || "—")}${
+    j.url ? ` · <a href="${esc(j.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation();">View posting ↗</a>` : ""
+  }</div>
+        <div class="meta">${ratingsBadgesHtml(j)} · discovered ${fmtDate(j.discoveredAt)}</div>
+      </div>
     </div>
   `;
 }
@@ -236,17 +276,20 @@ async function renderReview() {
     .sort((a, b) => b.score - a.score)
     .map(
       (j) => `
-    <div class="list-item">
-      <h4>${esc(j.title)} <span class="score ${scoreClass(j.score)}">Score ${j.score}</span></h4>
-      <div class="meta">${esc(j.company)} · ${esc(j.location || "—")} · via ${esc(j.source)} · discovered ${fmtDate(j.discoveredAt)}
-        ${j.url ? `&nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
+    <div class="list-item job-row">
+      ${companyLogoHtml(j.company, 44)}
+      <div class="job-row-main">
+        <h4>${esc(j.company)} <span class="score ${scoreClass(j.score)}">Score ${j.score}</span></h4>
+        <div class="meta">${esc(j.title)} · ${esc(j.location || "—")} · via ${esc(j.source)} · discovered ${fmtDate(j.discoveredAt)}
+          ${j.url ? `&nbsp;<a href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
+        </div>
+        ${ratingsDetailHtml(j)}
+        ${feedbackRowHtml(j)}
+        ${materialsLineHtml(j)}
+        <button data-approve="${j.id}">${j.materials ? "Approve" : "Approve & prepare materials"}</button>
+        <button class="secondary" data-detail="${j.id}">Details</button>
+        <button class="secondary" data-dismiss="${j.id}">Dismiss</button>
       </div>
-      ${ratingsDetailHtml(j)}
-      ${feedbackRowHtml(j)}
-      ${materialsLineHtml(j)}
-      <button data-approve="${j.id}">${j.materials ? "Approve" : "Approve & prepare materials"}</button>
-      <button class="secondary" data-detail="${j.id}">Details</button>
-      <button class="secondary" data-dismiss="${j.id}">Dismiss</button>
     </div>
   `
     )
@@ -287,48 +330,72 @@ async function renderReview() {
 }
 
 // ---------- Tracker ----------
-async function renderTracker() {
+// Status groups used by the Dashboard's "Applied"/"Interviewing" stat cards
+// (see renderDashboard) — clicking one jumps here pre-filtered to every
+// status that counts towards that stat, not just the single exact status.
+const TRACKER_STATUS_GROUPS = {
+  applied_or_later: {
+    label: "Applied (any stage)",
+    statuses: ["submitted", "interviewing", "offer", "rejected", "withdrawn"],
+  },
+  interviewing_or_later: {
+    label: "Interviewing (any stage)",
+    statuses: ["interviewing", "offer"],
+  },
+};
+
+async function renderTracker(initialFilter) {
+  const singleStatuses = ["reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"];
   main.innerHTML = `
     <h2>Tracker</h2>
     <div class="filters" style="justify-content:space-between;">
       <div class="filters" style="margin:0;">
         <label style="margin:0;">Status:</label>
-        <select id="status-filter" style="width:220px;">
+        <select id="status-filter" style="width:240px;">
           <option value="">All</option>
-          ${["reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"]
-            .map((s) => `<option value="${s}">${s.replace(/_/g, " ")}</option>`)
+          ${Object.entries(TRACKER_STATUS_GROUPS)
+            .map(([key, g]) => `<option value="${key}" ${initialFilter === key ? "selected" : ""}>${g.label}</option>`)
+            .join("")}
+          ${singleStatuses
+            .map((s) => `<option value="${s}" ${initialFilter === s ? "selected" : ""}>${s.replace(/_/g, " ")}</option>`)
             .join("")}
         </select>
       </div>
       <button id="add-job-manually" class="secondary">+ Add job manually</button>
     </div>
     <div class="card"><table id="tracker-table">
-      <thead><tr><th>Role</th><th>Company</th><th>Status</th><th>Score</th><th>Discovered</th><th>Applied</th></tr></thead>
-      <tbody id="tracker-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+      <thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Score</th><th>Discovered</th><th>Applied</th><th></th></tr></thead>
+      <tbody id="tracker-body"><tr><td colspan="7">Loading…</td></tr></tbody>
     </table></div>
   `;
   const load = async () => {
-    const status = document.getElementById("status-filter").value;
-    const allJobs = await api(`/jobs${status ? `?status=${status}` : ""}`);
-    // Newly-discovered matches live in the Review Queue until you act on
-    // them (approve/dismiss) — the Tracker only shows jobs you've actually
-    // engaged with, so "discovered" never appears here even under "All".
-    const jobs = status ? allJobs : allJobs.filter((j) => j.status !== "discovered");
+    const filterValue = document.getElementById("status-filter").value;
+    const group = TRACKER_STATUS_GROUPS[filterValue];
+    // A group filter (from a Dashboard stat card) covers several statuses at
+    // once, so it's applied client-side over the full job list rather than
+    // as a single-status server query.
+    const allJobs = await api(`/jobs${!group && filterValue ? `?status=${filterValue}` : ""}`);
+    const jobs = group
+      ? allJobs.filter((j) => group.statuses.includes(j.status))
+      : filterValue
+      ? allJobs
+      : allJobs.filter((j) => j.status !== "discovered");
     const tbody = document.getElementById("tracker-body");
     if (!jobs.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty">No jobs in this view.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="empty">No jobs in this view.</td></tr>`;
       return;
     }
     tbody.innerHTML = jobs
       .map(
         (j) => `
       <tr data-job-id="${j.id}">
+        <td class="company-cell">${companyLogoHtml(j.company, 24)}<strong>${esc(j.company)}</strong></td>
         <td>${esc(j.title)}</td>
-        <td>${esc(j.company)}</td>
         <td><span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></td>
         <td class="score ${scoreClass(j.score ?? -1)}">${j.score ?? "–"}<div class="rating-mini">${ratingsBadgesHtml(j)}</div></td>
         <td>${fmtDate(j.discoveredAt)}</td>
         <td>${fmtDate(j.appliedAt)}</td>
+        <td>${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener" title="View posting" onclick="event.stopPropagation();">↗</a>` : ""}</td>
       </tr>`
       )
       .join("");
@@ -403,8 +470,13 @@ async function openJobDetail(id) {
   const statuses = ["discovered","reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"];
   openModal(`
     <span class="close-x" id="close-modal">&times;</span>
-    <h3>${esc(job.title)}</h3>
-    <div class="meta">${esc(job.company)} · ${esc(job.location || "—")}${job.url ? ` · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}</div>
+    <div class="job-detail-header">
+      ${companyLogoHtml(job.company, 48)}
+      <div>
+        <h3>${esc(job.company)}</h3>
+        <div class="meta">${esc(job.title)} · ${esc(job.location || "—")}${job.url ? ` · <a href="${esc(job.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}</div>
+      </div>
+    </div>
     <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> ${job.score != null ? `&nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}</span>` : ""}</p>
     ${ratingsDetailHtml(job)}
     ${job.materials && job.materials.reviewQuestions && job.materials.reviewQuestions.length ? reviewQuestionsHtml(job.materials.reviewQuestions) : ""}

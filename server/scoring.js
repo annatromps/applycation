@@ -8,7 +8,7 @@
 // the job to produce a qualitative score+reasons, blended with the
 // rule-based score in discovery.js.
 
-const { callAI } = require("./ai/client");
+const { callAI, isAIConfigured } = require("./ai/client");
 
 function textIncludes(haystack, needle) {
   if (!haystack || !needle) return false;
@@ -189,6 +189,131 @@ function scoreJob(job, criteria) {
   };
 }
 
+// ---------- Submission ease ("how quick/easy is this actually to apply to")
+// ---------- Independent of your criteria profiles — this is purely about
+// the posting and process itself (how much you could fill out from a saved
+// CV/profile vs. custom writing, and how long/involved the process looks),
+// not about whether you're a good fit. Computed for every job that has a
+// description or URL, regardless of whether it also matches a profile.
+const EASE_HARD_SIGNALS = [
+  {
+    re: /cover letter/i,
+    unless: /no cover letter|without a cover letter|cover letter is not required|cover letter not required|don't need a cover letter|do not need a cover letter/i,
+    delta: -10,
+    reason: "Asks for a cover letter",
+  },
+  { re: /(writing sample|work sample|portfolio)/i, delta: -12, reason: "Asks for a work sample/portfolio" },
+  {
+    re: /(take[- ]home|case stud(y|ies)|assignment|assessment|coding challenge|skills test|technical test)/i,
+    delta: -20,
+    reason: "Includes a take-home task or assessment",
+  },
+  {
+    re: /(multiple (interview )?rounds|several rounds|[3-9] rounds of interviews)/i,
+    delta: -8,
+    reason: "Mentions multiple interview rounds",
+  },
+  { re: /(references required|provide references|list of references)/i, delta: -6, reason: "Asks for references upfront" },
+  {
+    re: /(why do you want to work|tell us about yourself|answer the following questions?|short answer|screening questions?)/i,
+    delta: -12,
+    reason: "Includes open-ended screening questions",
+  },
+];
+const EASE_ATS_HINTS = [
+  { re: /greenhouse\.io/i, delta: 12, reason: "Hosted on Greenhouse — usually a quick, standard application form" },
+  { re: /lever\.co/i, delta: 12, reason: "Hosted on Lever — usually a quick, standard application form" },
+  { re: /ashbyhq\.com/i, delta: 10, reason: "Hosted on Ashby — usually a quick, standard application form" },
+  { re: /workable\.com/i, delta: 10, reason: "Hosted on Workable — usually a quick, standard application form" },
+];
+
+function scoreSubmissionEase(job) {
+  const desc = job.description || "";
+  const url = job.url || "";
+  if (!desc.trim() && !url.trim()) {
+    return { submissionEaseScore: null, easeReasons: [] };
+  }
+
+  let score = 65; // baseline: assume a fairly standard "CV + a few fields" application
+  const reasons = [];
+  for (const { re, unless, delta, reason } of EASE_HARD_SIGNALS) {
+    if (re.test(desc) && !(unless && unless.test(desc))) {
+      score += delta;
+      reasons.push(reason);
+    }
+  }
+  for (const { re, delta, reason } of EASE_ATS_HINTS) {
+    if (re.test(url)) {
+      score += delta;
+      reasons.push(reason);
+    }
+  }
+  const words = desc.split(/\s+/).filter(Boolean).length;
+  if (words > 1200) {
+    score -= 15;
+    reasons.push("Very long posting — the process is likely more involved");
+  } else if (words > 700) {
+    score -= 8;
+    reasons.push("Long posting");
+  } else if (words && words < 250) {
+    score += 8;
+    reasons.push("Short, focused posting");
+  }
+
+  return { submissionEaseScore: Math.max(0, Math.min(100, Math.round(score))), easeReasons: reasons };
+}
+
+async function scoreSubmissionEaseWithAI(job, settings) {
+  const prompt = [
+    "You are estimating how EASY and QUICK a job application would be to actually submit — NOT whether the candidate is a good fit. Respond with ONLY a JSON object, no markdown fences, no commentary:",
+    '{"submissionEaseScore": <0-100 integer>, "easeReasons": ["short reason", "..."]}',
+    "",
+    "submissionEaseScore = 100 means: a short, standard application (upload CV, basic contact fields, maybe 1-click apply) that could be filled out almost entirely from a saved CV/profile in a couple of minutes.",
+    "submissionEaseScore = 0 means: a long, custom application requiring a cover letter, multiple open-ended written answers, a take-home assignment/case study/portfolio, or several interview rounds described up front.",
+    "Base this ONLY on what the posting says about the application/hiring process, plus how long and detailed the posting itself is (a very long, dense posting usually signals a more involved process). Do not consider whether the candidate is qualified for the role.",
+    "",
+    `Job title: ${job.title}`,
+    `Company: ${job.company}`,
+    `Posting URL: ${job.url || "not stated"}`,
+    `Job description: ${(job.description || "").slice(0, 3000)}`,
+  ].join("\n");
+
+  const raw = await callAI(settings, { prompt, maxTokens: 400 });
+  const jsonText = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  const parsed = JSON.parse(jsonText);
+  const clamp = (n) => Math.max(0, Math.min(100, Number(n) || 0));
+  return {
+    submissionEaseScore: clamp(parsed.submissionEaseScore),
+    easeReasons: (parsed.easeReasons || []).map((r) => `AI: ${r}`),
+  };
+}
+
+/**
+ * Combines the rule-based and (if configured) AI-assisted submission-ease
+ * passes, same blending pattern as the fit/appeal scores above. Always
+ * computed automatically wherever a job is scored (manual add, edited via
+ * PATCH, discovered, or backfilled at startup) — there's no separate button
+ * for this, it just happens alongside the rest of scoring.
+ */
+async function scoreSubmissionEaseFull(job, settings) {
+  let result = scoreSubmissionEase(job);
+  if (isAIConfigured(settings) && job.description && job.description.trim()) {
+    try {
+      const ai = await scoreSubmissionEaseWithAI(job, settings);
+      result =
+        result.submissionEaseScore == null
+          ? ai
+          : {
+              submissionEaseScore: Math.round((result.submissionEaseScore + ai.submissionEaseScore) / 2),
+              easeReasons: [...result.easeReasons, ...ai.easeReasons],
+            };
+    } catch (e) {
+      console.error(`[scoring] AI ease scoring failed for "${job.title}":`, e.message);
+    }
+  }
+  return result;
+}
+
 /**
  * AI-assisted scoring pass. Sends the job + your structured criteria + your
  * free-text "AI preferences" to Claude and asks for two qualitative 0-100
@@ -275,4 +400,4 @@ function buildFeedbackContext(jobs, maxEntries = 25) {
     .join("\n");
 }
 
-module.exports = { scoreJob, scoreJobWithAI, buildFeedbackContext };
+module.exports = { scoreJob, scoreJobWithAI, buildFeedbackContext, scoreSubmissionEaseFull };
