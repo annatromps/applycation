@@ -3,8 +3,16 @@
 // pointed senderFilter at (see below). Only ever reads mail already sitting
 // in an inbox you've explicitly connected in Settings > Advanced >
 // "Job-alert email import" — it never fetches anything from any job site
-// directly. Marks processed emails as \Seen so the same digest isn't
-// imported twice; never deletes or moves anything.
+// directly. Never deletes or moves anything.
+//
+// Dedup is by RFC Message-ID (persisted in meta.emailDigestProcessedIds —
+// see server/discovery.js), NOT by IMAP's \Seen flag. An earlier version of
+// this searched with `seen: false`, which meant any digest email you'd
+// already opened in your real email client — a near-certainty for anyone
+// connecting a previously-used inbox — was permanently invisible here, no
+// matter how many discovery cycles ran. \Seen is still set on each message
+// after it's read, but purely as a courtesy visual cue; it's no longer
+// load-bearing for dedup.
 
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
@@ -44,28 +52,50 @@ function buildImapClient(cfg) {
   });
 }
 
+// How far back to look each cycle, and how many processed Message-IDs to
+// remember. The lookback bounds how much a large, previously-unconnected
+// inbox costs to search; the id cap bounds meta.emailDigestProcessedIds
+// from growing forever (oldest ids drop off first — a message that old
+// would have aged out of the lookback window anyway, so forgetting it is
+// safe).
+const DIGEST_LOOKBACK_DAYS = 60;
+const MAX_PROCESSED_IDS = 3000;
+
 /**
  * @param {object} settings - app settings; reads settings.emailInbox
- * @returns {Promise<Array<{subject: string, date: string|null, html: string, text: string}>>}
+ * @param {string[]} processedIds - RFC Message-IDs already imported in a
+ *   prior run (persisted in meta.emailDigestProcessedIds) — anything with
+ *   a Message-ID in this list is skipped without re-parsing or re-billing
+ *   AI extraction on it.
+ * @returns {Promise<{results: Array<{subject: string, date: string|null, html: string, text: string}>, processedIds: string[]}>}
+ *   `processedIds` is the updated, capped list to persist back for next time.
  */
-async function fetchNewLinkedInDigests(settings) {
+async function fetchNewLinkedInDigests(settings, processedIds = []) {
   const cfg = (settings && settings.emailInbox) || {};
-  if (!cfg.enabled || !cfg.user || !cfg.appPassword) return [];
+  if (!cfg.enabled || !cfg.user || !cfg.appPassword) return { results: [], processedIds };
 
+  const alreadyProcessed = new Set(processedIds || []);
   const client = buildImapClient(cfg);
   const results = [];
+  const newlyProcessed = [];
   await client.connect();
   try {
     const lock = await client.getMailboxLock(cfg.folder || "INBOX");
     try {
       const senders = parseSenderList(cfg.senderFilter);
+      const since = new Date(Date.now() - DIGEST_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
       const searchQuery =
-        senders.length > 1 ? { seen: false, or: senders.map((from) => ({ from })) } : { seen: false, from: senders[0] };
+        senders.length > 1 ? { since, or: senders.map((from) => ({ from })) } : { since, from: senders[0] };
       const uids = await client.search(searchQuery, { uid: true });
       for (const uid of uids || []) {
         try {
-          const msg = await client.fetchOne(uid, { source: true }, { uid: true });
+          const msg = await client.fetchOne(uid, { source: true, envelope: true }, { uid: true });
           if (!msg || !msg.source) continue;
+          // Fall back to a uid-based key on the rare message missing a
+          // Message-ID header — still dedups within this one inbox, just
+          // not portably across a re-import elsewhere.
+          const dedupeKey = (msg.envelope && msg.envelope.messageId) || `uid:${uid}`;
+          if (alreadyProcessed.has(dedupeKey)) continue;
           const parsed = await simpleParser(msg.source);
           results.push({
             subject: parsed.subject || "",
@@ -73,9 +103,9 @@ async function fetchNewLinkedInDigests(settings) {
             html: parsed.html || "",
             text: parsed.text || "",
           });
-          // Mark read regardless of what we manage to extract below — the
-          // goal is "don't reprocess this email again", not "don't mark it
-          // read until every job in it was successfully imported".
+          newlyProcessed.push(dedupeKey);
+          // Courtesy visual cue only now — see the file header comment for
+          // why dedup no longer depends on this flag.
           await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
         } catch (e) {
           console.error(`[email/inbox] failed reading message uid ${uid}:`, e.message);
@@ -87,7 +117,8 @@ async function fetchNewLinkedInDigests(settings) {
   } finally {
     await client.logout().catch(() => {});
   }
-  return results;
+  const updatedProcessedIds = [...processedIds, ...newlyProcessed].slice(-MAX_PROCESSED_IDS);
+  return { results, processedIds: updatedProcessedIds };
 }
 
 // Lightweight connectivity check for the Settings health indicator and the

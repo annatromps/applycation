@@ -59,6 +59,12 @@ function defaultData() {
       // server/discovery.js and routes/settings.js's /email-inbox/test.
       // null until it's been run or tested at least once.
       emailInboxHealth: null,
+      // RFC Message-IDs of job-alert digest emails already imported, so
+      // the same email isn't re-parsed (or re-billed for AI extraction)
+      // every cycle. Deliberately independent of IMAP's \Seen flag — see
+      // server/email/inbox.js's header comment. Capped/FIFO; see
+      // MAX_PROCESSED_IDS there.
+      emailDigestProcessedIds: [],
       // Health of the configured AI provider — only ever set by the
       // on-demand "Test connection" button next to it in Settings (see
       // routes/settings.js's /ai/test). null until tested at least once.

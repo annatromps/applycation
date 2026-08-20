@@ -37,8 +37,13 @@ async function runDiscoveryCycle() {
   let digestJobs = [];
   if (data.settings.emailInbox && data.settings.emailInbox.enabled) {
     try {
-      const digestResult = await discoverFromEmailDigests(data.settings);
+      const priorProcessedIds = data.meta.emailDigestProcessedIds || [];
+      const digestResult = await discoverFromEmailDigests(data.settings, priorProcessedIds);
       digestJobs = digestResult.jobs;
+      // Persisted so the next cycle knows what's already been imported —
+      // dedup is by Message-ID, not by IMAP's \Seen flag (see
+      // email/inbox.js's header comment for why that used to be a bug).
+      data.meta.emailDigestProcessedIds = digestResult.processedIds;
       // Recorded on every run (success or failure) so the Settings health
       // indicator reflects real, recent usage rather than a synthetic ping —
       // see routes/settings.js's /email-inbox/test for the on-demand check.

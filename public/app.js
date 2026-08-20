@@ -1,6 +1,18 @@
 const main = document.getElementById("main");
 const modalRoot = document.getElementById("modal-root");
 
+// Rotated on the "Run discovery now" button while a cycle is in flight —
+// see runDiscoveryCycle in server/discovery.js for the real order of
+// operations this is approximating (it's one atomic request under the
+// hood, not real streamed progress).
+const DISCOVERY_LOADING_MESSAGES = [
+  "🔍 Checking job boards…",
+  "📬 Scanning your email digests…",
+  "🏢 Looking up company postings…",
+  "🧠 Scoring matches against your criteria…",
+  "📝 Drafting tailored materials…",
+];
+
 async function api(path, opts = {}) {
   const res = await fetch(`/api${path}`, {
     headers: { "content-type": "application/json" },
@@ -301,16 +313,30 @@ async function renderDashboard() {
     });
   });
   document.getElementById("run-discovery").addEventListener("click", async (e) => {
-    e.target.disabled = true;
-    e.target.textContent = "Running…";
+    const btn = e.target;
+    btn.disabled = true;
+    // A single atomic backend call, not real step-by-step progress — this
+    // just cycles through what a cycle is roughly doing at any given moment
+    // so a multi-source run (job boards + email digests + posting lookups +
+    // scoring) doesn't sit on a bare "Running…" for what can be 10-20+
+    // seconds. See server/discovery.js's runDiscoveryCycle for the actual
+    // steps this is approximating.
+    let msgIndex = 0;
+    btn.textContent = DISCOVERY_LOADING_MESSAGES[0];
+    const rotateLoadingMessage = setInterval(() => {
+      msgIndex = (msgIndex + 1) % DISCOVERY_LOADING_MESSAGES.length;
+      btn.textContent = DISCOVERY_LOADING_MESSAGES[msgIndex];
+    }, 1800);
     try {
       const result = await api("/jobs/discover", { method: "POST" });
+      clearInterval(rotateLoadingMessage);
       alert(`Discovery complete: ${result.added} new match(es) found.`);
       renderDashboard();
     } catch (err) {
+      clearInterval(rotateLoadingMessage);
       alert(`Discovery failed: ${err.message}`);
-      e.target.disabled = false;
-      e.target.textContent = "Run discovery now";
+      btn.disabled = false;
+      btn.textContent = "Run discovery now";
     }
   });
   attachRowHandlers();

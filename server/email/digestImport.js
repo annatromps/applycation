@@ -17,17 +17,21 @@ const SOURCE = "email-digest";
 
 /**
  * @param {object} settings
- * @returns {Promise<{jobs: Array, emailsChecked: number}>} jobs in the same
- *   shape server/sources/*.js produce, plus a `resolvedVia` field
- *   ("greenhouse" | "lever" | "ashby" | "recruitee" | "original") noting
- *   whether the URL/description came from the employer's own ATS or is the
- *   original digest-email link passed through unresolved. `emailsChecked`
- *   is how many unread matching emails were fetched this run (not how many
- *   contained a job) — used to power the Settings health indicator.
+ * @param {string[]} processedIds - previously-imported Message-IDs, passed
+ *   straight through to fetchNewLinkedInDigests — see that function's docs.
+ * @returns {Promise<{jobs: Array, emailsChecked: number, processedIds: string[]}>}
+ *   jobs in the same shape server/sources/*.js produce, plus a
+ *   `resolvedVia` field ("greenhouse" | "lever" | "ashby" | "recruitee" |
+ *   "original") noting whether the URL/description came from the
+ *   employer's own ATS or is the original digest-email link passed through
+ *   unresolved. `emailsChecked` is how many new matching emails were
+ *   fetched this run (not how many contained a job) — used to power the
+ *   Settings health indicator. `processedIds` is the updated list to
+ *   persist back to meta.emailDigestProcessedIds.
  */
-async function discoverFromEmailDigests(settings) {
-  const emails = await fetchNewLinkedInDigests(settings);
-  if (!emails.length) return { jobs: [], emailsChecked: 0 };
+async function discoverFromEmailDigests(settings, processedIds = []) {
+  const { results: emails, processedIds: updatedProcessedIds } = await fetchNewLinkedInDigests(settings, processedIds);
+  if (!emails.length) return { jobs: [], emailsChecked: 0, processedIds: updatedProcessedIds };
 
   const jobs = [];
   const seenKeys = new Set();
@@ -69,7 +73,7 @@ async function discoverFromEmailDigests(settings) {
       });
     }
   }
-  return { jobs, emailsChecked: emails.length };
+  return { jobs, emailsChecked: emails.length, processedIds: updatedProcessedIds };
 }
 
 module.exports = { discoverFromEmailDigests, SOURCE };
