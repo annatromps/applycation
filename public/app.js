@@ -362,10 +362,15 @@ const routes = {
   settings: renderSettings,
 };
 
+// Archive is a sub-tab of Review Queue (see reviewSubTabsHtml), not its own
+// left-nav entry, so #/archive should still highlight "Review Queue" there.
+const NAV_HIGHLIGHT_ALIAS = { archive: "review" };
+
 function route() {
   const hash = (location.hash || "#/dashboard").replace("#/", "");
   const [view, param] = hash.split("/");
-  document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === view));
+  const highlightAs = NAV_HIGHLIGHT_ALIAS[view] || view;
+  document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === highlightAs));
   (routes[view] || renderDashboard)(param);
 }
 window.addEventListener("hashchange", route);
@@ -602,6 +607,19 @@ function attachTrackerRowActionHandlers(jobs, onChange) {
 }
 
 // ---------- Review Queue ----------
+// Archive lives under Review Queue as a sub-tab (not its own sidebar entry —
+// see NAV_HIGHLIGHT_ALIAS above) since it's really just "the other status
+// filter" on the same underlying list of jobs you haven't moved forward
+// with yet. Shared by renderReview() and renderArchive().
+function reviewSubTabsHtml(active) {
+  return `
+    <div class="subtabs">
+      <a href="#/review" class="${active === "review" ? "active" : ""}">Awaiting review</a>
+      <a href="#/archive" class="${active === "archive" ? "active" : ""}">Archive</a>
+    </div>
+  `;
+}
+
 function reviewJobRowHtml(j) {
   return `
     <div class="list-item job-row">
@@ -630,7 +648,7 @@ const REVIEW_SORTS = {
 };
 
 async function renderReview() {
-  main.innerHTML = `<h2>Review Queue</h2><div id="review-body">Loading…</div>`;
+  main.innerHTML = `<h2>Review Queue</h2>${reviewSubTabsHtml("review")}<div id="review-body">Loading…</div>`;
   const jobs = await api("/jobs?status=discovered");
   const body = document.getElementById("review-body");
   if (!jobs.length) {
@@ -948,7 +966,7 @@ async function renderTracker(initialFilter) {
 // so it's easy to see why something was passed on later; "Restore" undoes
 // it by putting the job back in the Review Queue.
 async function renderArchive() {
-  main.innerHTML = `<h2>Archive</h2><div id="archive-body">Loading…</div>`;
+  main.innerHTML = `<h2>Review Queue</h2>${reviewSubTabsHtml("archive")}<div id="archive-body">Loading…</div>`;
   const jobs = await api("/jobs?status=dismissed");
   const body = document.getElementById("archive-body");
   if (!jobs.length) {
