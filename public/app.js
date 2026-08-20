@@ -32,6 +32,26 @@ function fmtDate(iso) {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
+// ---------- LinkedIn digest import health indicator ----------
+// health is settings.emailInboxHealth (see server/defaultData.js /
+// server/discovery.js) — null until the feature has actually run or been
+// tested at least once. Updated automatically on every discovery cycle
+// (success or failure) and on-demand via the "Test connection" button, so
+// this reflects real recent behaviour rather than a synthetic ping.
+function emailHealthHtml(health) {
+  if (!health) {
+    return `<span class="health-dot health-unknown"></span><span class="hint">Not checked yet — hit "Test connection" below, or save settings and run a discovery cycle.</span>`;
+  }
+  if (health.status === "ok") {
+    const detail =
+      health.source === "manual_test"
+        ? `Connected successfully (tested ${fmtDate(health.checkedAt)}).`
+        : `Working as of ${fmtDate(health.checkedAt)} — checked ${health.emailsChecked ?? 0} email(s), found ${health.jobsFound ?? 0} job listing(s).`;
+    return `<span class="health-dot health-ok"></span><span class="hint">${esc(detail)}</span>`;
+  }
+  return `<span class="health-dot health-error"></span><span class="hint">Failing as of ${fmtDate(health.checkedAt)} — ${esc(health.error || "unknown error")}</span>`;
+}
+
 function scoreClass(score) {
   if (score >= 75) return "high";
   if (score >= 55) return "mid";
@@ -829,11 +849,12 @@ async function renderSettings() {
       <p class="hint">Free text — tone, length, structure, whatever preferences you want the AI-assisted cover letter drafter (see "Optional: AI-assisted scoring &amp; cover letter drafting" above) to keep in mind for every letter it writes. Only used when an AI provider is configured above; template mode (no provider) ignores it. This is separate from the "Experience bank" on the <a href="#/me">Me</a> tab, which is source material, not instructions.</p>
 
       <div class="section-title">Optional: LinkedIn digest import</div>
-      <p class="hint">Since LinkedIn has no public jobs API and scraping it breaks their terms of service, this app never touches linkedin.com directly. Instead, it can read LinkedIn's own "jobs for you" alert emails from an inbox you connect below, and try to resolve each listing to the employer's own Greenhouse/Lever posting (falling back to the LinkedIn link when it can't). Needs a Gmail-style <strong>App password</strong> (Google Account &rarr; Security &rarr; App passwords) — not your real password.</p>
+      <p class="hint">Since LinkedIn has no public jobs API and scraping it breaks their terms of service, this app never touches linkedin.com directly. Instead, it can read LinkedIn's own alert emails from an inbox you connect below, and try to resolve each listing to the employer's own posting (falling back to the LinkedIn link when it can't). Needs a Gmail-style <strong>App password</strong> (Google Account &rarr; Security &rarr; App passwords) — not your real password.</p>
       <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
         <input type="checkbox" id="emailInboxEnabled" ${emailInbox.enabled ? "checked" : ""} style="width:auto;" />
         Import LinkedIn digest emails from a connected inbox
       </label>
+      <div id="email-inbox-health" style="margin:8px 0 4px;">${emailHealthHtml(settings.emailInboxHealth)}</div>
       <div class="form-row">
         <div>
           <label>Email address</label>
@@ -850,10 +871,12 @@ async function renderSettings() {
           <input type="text" id="emailInboxHost" value="${esc(emailInbox.host || "imap.gmail.com")}" />
         </div>
         <div>
-          <label>Sender to watch for</label>
-          <input type="text" id="emailInboxSender" value="${esc(emailInbox.senderFilter || "jobs-noreply@linkedin.com")}" />
+          <label>Senders/domains to watch for (comma-separated)</label>
+          <input type="text" id="emailInboxSender" value="${esc(emailInbox.senderFilter || "linkedin.com")}" placeholder="linkedin.com" />
         </div>
       </div>
+      <p class="hint">Defaults to the whole "linkedin.com" domain, which catches every kind of LinkedIn alert email LinkedIn might send — anything without an actual job link in it is skipped for free, so this is safe to leave broad. Add specific addresses (comma-separated) instead if you'd rather narrow it down, all read through this same one inbox + app password.</p>
+      <div style="margin-top:10px;"><button type="button" id="test-email-inbox" class="secondary">Test connection</button></div>
 
       <div style="margin-top:16px;"><button id="save-settings-advanced">Save settings</button><span id="settings-msg-advanced" class="hint"></span></div>
     </details>
@@ -905,7 +928,7 @@ async function renderSettings() {
         port: 993,
         secure: true,
         folder: "INBOX",
-        senderFilter: document.getElementById("emailInboxSender").value.trim() || "jobs-noreply@linkedin.com",
+        senderFilter: document.getElementById("emailInboxSender").value.trim() || "linkedin.com",
       },
     };
   }
@@ -916,6 +939,39 @@ async function renderSettings() {
   }
   document.getElementById("save-settings").addEventListener("click", () => saveSettings(document.getElementById("settings-msg")));
   document.getElementById("save-settings-advanced").addEventListener("click", () => saveSettings(document.getElementById("settings-msg-advanced")));
+
+  // Tests against whatever's currently typed in the form, not just the last
+  // saved values, so you can verify credentials before hitting Save. If the
+  // app-password field still shows the masked placeholder (untouched since
+  // last save), the server tests with the real saved password instead.
+  document.getElementById("test-email-inbox").addEventListener("click", async () => {
+    const btn = document.getElementById("test-email-inbox");
+    const target = document.getElementById("email-inbox-health");
+    btn.disabled = true;
+    btn.textContent = "Testing…";
+    try {
+      const result = await api("/settings/email-inbox/test", {
+        method: "POST",
+        body: JSON.stringify({
+          emailInbox: {
+            user: document.getElementById("emailInboxUser").value.trim(),
+            appPassword: document.getElementById("emailInboxAppPassword").value,
+            host: document.getElementById("emailInboxHost").value.trim() || "imap.gmail.com",
+            senderFilter: document.getElementById("emailInboxSender").value.trim() || "linkedin.com",
+          },
+        }),
+      });
+      target.innerHTML = emailHealthHtml(
+        result.ok
+          ? { status: "ok", checkedAt: new Date().toISOString(), source: "manual_test" }
+          : { status: "error", checkedAt: new Date().toISOString(), error: result.error }
+      );
+    } catch (err) {
+      target.innerHTML = emailHealthHtml({ status: "error", checkedAt: new Date().toISOString(), error: err.message });
+    }
+    btn.disabled = false;
+    btn.textContent = "Test connection";
+  });
 }
 
 // ---------- Me (candidate profile: CV, experience bank, criteria) ----------

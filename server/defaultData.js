@@ -31,7 +31,12 @@ function defaultData() {
         user: "",
         appPassword: "", // a Gmail "App password", not your real password
         folder: "INBOX",
-        senderFilter: "jobs-noreply@linkedin.com",
+        // Comma-separated list of senders/domains to watch for, all read
+        // through this one inbox + app password. Defaults to the whole
+        // "linkedin.com" domain — a catch-all so every kind of LinkedIn job
+        // digest gets picked up rather than only one specific address —
+        // narrow it to specific addresses here if you want to be pickier.
+        senderFilter: "linkedin.com",
       },
     },
     criteriaProfiles: [],
@@ -46,6 +51,10 @@ function defaultData() {
     meta: {
       lastDiscoveryRun: null,
       appVersion: "0.1.0",
+      // Health of the LinkedIn digest import — see server/discovery.js and
+      // routes/settings.js's /email-inbox/test. null until it's been run or
+      // tested at least once.
+      emailInboxHealth: null,
     },
   };
 }

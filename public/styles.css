@@ -338,6 +338,14 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
 }
 .cv-upload-row input[type=file] { width: auto; flex: 1; min-width: 180px; }
 
+.health-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 7px; vertical-align: middle; flex-shrink: 0;
+}
+.health-ok { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
+.health-error { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); }
+.health-unknown { background: var(--grey-light); }
+
 .feedback-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
 .fb-btn {
   background: white; border: 1px solid var(--border); border-radius: 999px; padding: 4px 13px;

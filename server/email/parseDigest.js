@@ -70,6 +70,15 @@ async function aiExtract(text, settings) {
  * @returns {Promise<Array<{title: string, company: string, linkedinUrl: string}>>}
  */
 async function extractDigestEntries({ html, text }, settings) {
+  // Cheap short-circuit before spending an AI call: the sender filter is a
+  // broad "linkedin.com" catch-all by default (see server/email/inbox.js),
+  // so plenty of fetched emails (connection requests, InMail, etc.) will
+  // have no job listing in them at all. If neither the HTML nor the plain
+  // text contains an actual job posting link, there is nothing to extract
+  // either way — skip straight to returning nothing rather than paying for
+  // an AI pass with no possible useful result.
+  if (!LINKEDIN_JOB_LINK.test(html || "") && !LINKEDIN_JOB_LINK.test(text || "")) return [];
+
   if (isAIConfigured(settings)) {
     const plain = text || (html || "").replace(/<[^>]+>/g, " ");
     const ai = await aiExtract(plain, settings);

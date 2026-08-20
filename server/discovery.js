@@ -34,9 +34,27 @@ async function runDiscoveryCycle() {
   let digestJobs = [];
   if (data.settings.emailInbox && data.settings.emailInbox.enabled) {
     try {
-      digestJobs = await discoverFromLinkedInDigests(data.settings);
+      const digestResult = await discoverFromLinkedInDigests(data.settings);
+      digestJobs = digestResult.jobs;
+      // Recorded on every run (success or failure) so the Settings health
+      // indicator reflects real, recent usage rather than a synthetic ping —
+      // see routes/settings.js's /email-inbox/test for the on-demand check.
+      data.meta.emailInboxHealth = {
+        status: "ok",
+        checkedAt: new Date().toISOString(),
+        error: null,
+        emailsChecked: digestResult.emailsChecked,
+        jobsFound: digestResult.jobs.length,
+      };
     } catch (e) {
       console.error("[discovery] LinkedIn digest import failed for this cycle:", e.message);
+      data.meta.emailInboxHealth = {
+        status: "error",
+        checkedAt: new Date().toISOString(),
+        error: e.message,
+        emailsChecked: null,
+        jobsFound: null,
+      };
     }
   }
 

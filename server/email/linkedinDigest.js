@@ -15,14 +15,17 @@ const SOURCE = "linkedin-digest";
 
 /**
  * @param {object} settings
- * @returns {Promise<Array>} jobs in the same shape server/sources/*.js produce,
- *   plus a `resolvedVia` field ("greenhouse" | "lever" | "linkedin") noting
- *   whether the URL/description came from the employer's own ATS or is a
- *   LinkedIn link passed through unresolved.
+ * @returns {Promise<{jobs: Array, emailsChecked: number}>} jobs in the same
+ *   shape server/sources/*.js produce, plus a `resolvedVia` field
+ *   ("greenhouse" | "lever" | "linkedin") noting whether the URL/description
+ *   came from the employer's own ATS or is a LinkedIn link passed through
+ *   unresolved. `emailsChecked` is how many unread matching emails were
+ *   fetched this run (not how many contained a job) — used to power the
+ *   Settings health indicator.
  */
 async function discoverFromLinkedInDigests(settings) {
   const emails = await fetchNewLinkedInDigests(settings);
-  if (!emails.length) return [];
+  if (!emails.length) return { jobs: [], emailsChecked: 0 };
 
   const jobs = [];
   const seenKeys = new Set();
@@ -64,7 +67,7 @@ async function discoverFromLinkedInDigests(settings) {
       });
     }
   }
-  return jobs;
+  return { jobs, emailsChecked: emails.length };
 }
 
 module.exports = { discoverFromLinkedInDigests, SOURCE };
