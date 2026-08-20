@@ -238,6 +238,14 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
 .material-preview h1, .material-preview h2, .material-preview h3 { margin: 16px 0 8px; }
 .material-preview h1:first-child, .material-preview h2:first-child, .material-preview h3:first-child { margin-top: 0; }
 
+.sender-suggestion-list { max-height: 50vh; overflow-y: auto; margin-top: 10px; }
+.sender-suggestion-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--border-soft);
+  font-weight: normal; cursor: pointer;
+}
+.sender-suggestion-row:last-child { border-bottom: none; }
+.sender-suggestion-row input[type=checkbox] { width: auto; margin-top: 3px; }
+
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 

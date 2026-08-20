@@ -52,6 +52,20 @@ function emailHealthHtml(health) {
   return `<span class="health-dot health-error"></span><span class="hint">Failing as of ${fmtDate(health.checkedAt)} — ${esc(health.error || "unknown error")}</span>`;
 }
 
+// Same idea as emailHealthHtml above, for the AI provider — only ever set
+// by the "Test connection" button next to it (see routes/settings.js's
+// /ai/test), since there's no free recurring check like the email one gets
+// from riding along on every discovery cycle.
+function aiHealthHtml(health) {
+  if (!health) {
+    return `<span class="health-dot health-unknown"></span><span class="hint">Not tested yet — hit "Test connection" below.</span>`;
+  }
+  if (health.status === "ok") {
+    return `<span class="health-dot health-ok"></span><span class="hint">Connected successfully (tested ${fmtDate(health.checkedAt)}).</span>`;
+  }
+  return `<span class="health-dot health-error"></span><span class="hint">Failing as of ${fmtDate(health.checkedAt)} — ${esc(health.error || "unknown error")}</span>`;
+}
+
 function scoreClass(score) {
   if (score >= 75) return "high";
   if (score >= 55) return "mid";
@@ -934,6 +948,8 @@ async function renderSettings() {
         <p class="hint" id="ai-provider-hint">${AI_PROVIDER_INFO[aiProvider].hint}</p>
         <label>Model (leave blank for the default)</label>
         <input type="text" id="aiModel" value="${esc(settings.aiModel || "")}" placeholder="${AI_PROVIDER_INFO[aiProvider].model || ""}" />
+        <div id="ai-provider-health" style="margin:8px 0 4px;">${aiHealthHtml(settings.aiProviderHealth)}</div>
+        <div><button type="button" id="test-ai-connection" class="secondary">Test connection</button></div>
       </div>
       <label>Max AI-scored jobs per discovery run (cost guard)</label>
       <input type="number" id="maxAiScoredPerCycle" min="0" value="${settings.maxAiScoredPerCycle ?? 15}" />
@@ -973,7 +989,7 @@ async function renderSettings() {
           <input type="text" id="emailInboxSender" value="${esc(emailInbox.senderFilter || "linkedin.com")}" placeholder="linkedin.com, indeed.com, welcometothejungle.com" />
         </div>
       </div>
-      <p class="hint">Add every job site you get alert/digest emails from here, comma-separated — e.g. "linkedin.com, indeed.com, welcometothejungle.com, wellfound.com". A whole domain like "linkedin.com" is a catch-all for every kind of alert email that site sends; anything fetched that turns out not to actually contain a job listing is skipped for free, so it's safe to leave broad rather than guessing exact sender addresses.</p>
+      <p class="hint">Add every job site you get alert/digest emails from here, comma-separated — e.g. "linkedin.com, indeed.com, welcometothejungle.com, wellfound.com". A whole domain like "linkedin.com" is a catch-all for every kind of alert email that site sends; anything fetched that turns out not to actually contain a job listing is skipped for free, so it's safe to leave broad rather than guessing exact sender addresses. Not sure what else to add? <button type="button" id="scan-inbox-senders" class="link-btn">🔍 Scan my inbox for job sites</button> — looks through your recent mail for likely candidates and lets you confirm or dismiss each one before anything's added.</p>
       <div style="margin-top:10px;"><button type="button" id="test-email-inbox" class="secondary">Test connection</button></div>
 
       <div style="margin-top:16px;"><button id="save-settings-advanced">Save settings</button><span id="settings-msg-advanced" class="hint"></span></div>
@@ -1070,6 +1086,122 @@ async function renderSettings() {
     }
     btn.disabled = false;
     btn.textContent = "Test connection";
+  });
+
+  // Same idea, for the AI provider — one small real request against
+  // whatever's currently typed in (falling back to the saved key if the
+  // field still shows the masked placeholder), so a bad key shows up here
+  // instead of silently failing the next time scoring/drafting/posting
+  // search tries to use it.
+  document.getElementById("test-ai-connection").addEventListener("click", async () => {
+    const btn = document.getElementById("test-ai-connection");
+    const target = document.getElementById("ai-provider-health");
+    btn.disabled = true;
+    btn.textContent = "Testing…";
+    try {
+      const result = await api("/settings/ai/test", {
+        method: "POST",
+        body: JSON.stringify({
+          aiProvider: document.getElementById("aiProvider").value,
+          aiApiKey: document.getElementById("aiApiKey").value,
+          aiModel: document.getElementById("aiModel").value,
+        }),
+      });
+      target.innerHTML = aiHealthHtml(
+        result.ok
+          ? { status: "ok", checkedAt: new Date().toISOString() }
+          : { status: "error", checkedAt: new Date().toISOString(), error: result.error }
+      );
+    } catch (err) {
+      target.innerHTML = aiHealthHtml({ status: "error", checkedAt: new Date().toISOString(), error: err.message });
+    }
+    btn.disabled = false;
+    btn.textContent = "Test connection";
+  });
+
+  // Scans recent inbox mail for sender domains that look like job alerts
+  // you haven't added yet (see server/email/inbox.js's suggestSenderDomains
+  // for the heuristic and its limits — subject-line wording only, so it's
+  // a starting point to confirm/dismiss, not a guarantee). Nothing gets
+  // added to the sender list without you explicitly checking it here.
+  document.getElementById("scan-inbox-senders").addEventListener("click", async () => {
+    const btn = document.getElementById("scan-inbox-senders");
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "🔍 Scanning your inbox…";
+    try {
+      const result = await api("/settings/email-inbox/suggest-domains", {
+        method: "POST",
+        body: JSON.stringify({
+          emailInbox: {
+            user: document.getElementById("emailInboxUser").value.trim(),
+            appPassword: document.getElementById("emailInboxAppPassword").value,
+            host: document.getElementById("emailInboxHost").value.trim() || "imap.gmail.com",
+            senderFilter: document.getElementById("emailInboxSender").value.trim() || "linkedin.com",
+          },
+        }),
+      });
+      if (!result.ok) {
+        alert(`Couldn't scan your inbox: ${result.error}`);
+      } else if (!result.candidates.length) {
+        alert(`Scanned ${result.scanned} recent email(s) — nothing that looked like a new job-alert sender turned up. You're probably already watching everything relevant.`);
+      } else {
+        openSenderSuggestionsModal(result.candidates, result.scanned);
+      }
+    } catch (err) {
+      alert(`Couldn't scan your inbox: ${err.message}`);
+    }
+    btn.disabled = false;
+    btn.textContent = originalText;
+  });
+}
+
+// Lets you confirm or dismiss each domain server/email/inbox.js's
+// suggestSenderDomains flagged as a likely job-alert sender you're not
+// already watching. Checking boxes and hitting "Add checked domains" just
+// updates the sender-filter text field on the Settings page underneath —
+// you still need to hit "Save settings" there to persist it, same as any
+// other field on that page.
+function openSenderSuggestionsModal(candidates, scanned) {
+  openModal(`
+    <span class="close-x" id="close-modal">&times;</span>
+    <h3>Job-alert senders found in your inbox</h3>
+    <p class="hint">Scanned ${scanned} recent email(s). Check the ones that are actually job alerts — anything unchecked is left alone.</p>
+    <div class="sender-suggestion-list">
+      ${candidates
+        .map(
+          (c, i) => `
+        <label class="sender-suggestion-row">
+          <input type="checkbox" id="sender-cand-${i}" data-domain="${esc(c.domain)}" checked />
+          <div>
+            <strong>${esc(c.domain)}</strong> <span class="hint">— ${c.count} email${c.count === 1 ? "" : "s"}</span>
+            ${c.examples && c.examples.length ? `<div class="hint">e.g. "${esc(c.examples[0])}"</div>` : ""}
+          </div>
+        </label>`
+        )
+        .join("")}
+    </div>
+    <div style="margin-top:14px;"><button id="add-sender-suggestions">Add checked domains</button> <span id="sender-suggestions-msg" class="hint"></span></div>
+  `, "modal-wide");
+  document.getElementById("close-modal").addEventListener("click", closeModal);
+  document.getElementById("add-sender-suggestions").addEventListener("click", () => {
+    const chosen = candidates
+      .map((c, i) => (document.getElementById(`sender-cand-${i}`).checked ? c.domain : null))
+      .filter(Boolean);
+    if (!chosen.length) {
+      document.getElementById("sender-suggestions-msg").textContent = "Nothing checked — nothing added.";
+      return;
+    }
+    const field = document.getElementById("emailInboxSender");
+    const existing = field.value
+      .split(/[,\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const merged = [...new Set([...existing, ...chosen])];
+    field.value = merged.join(", ");
+    closeModal();
+    field.scrollIntoView({ behavior: "smooth", block: "center" });
+    field.focus();
   });
 }
 

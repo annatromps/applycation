@@ -139,4 +139,4 @@ async function extractDigestEntries({ html, text, subject }, settings) {
   return ruleBasedExtract(html, text);
 }
 
-module.exports = { extractDigestEntries, looksLikeJobLink };
+module.exports = { extractDigestEntries, looksLikeJobLink, JOB_ALERT_SUBJECT_HINT };

@@ -59,6 +59,10 @@ function defaultData() {
       // server/discovery.js and routes/settings.js's /email-inbox/test.
       // null until it's been run or tested at least once.
       emailInboxHealth: null,
+      // Health of the configured AI provider — only ever set by the
+      // on-demand "Test connection" button next to it in Settings (see
+      // routes/settings.js's /ai/test). null until tested at least once.
+      aiProviderHealth: null,
     },
   };
 }

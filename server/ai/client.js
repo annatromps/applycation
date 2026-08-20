@@ -174,9 +174,29 @@ async function callAI(settings, { prompt, maxTokens = 600, allowWebSearch = fals
   }
 }
 
+// On-demand connectivity check for the Settings health indicator — same
+// idea as email/inbox.js's testConnection(), just for whichever AI
+// provider + key is configured. Sends the smallest possible real request
+// (a few tokens) so it actually proves the key/provider/model combination
+// works end to end, rather than just checking the key is non-empty.
+// Deliberately never sets allowWebSearch — this only verifies basic
+// connectivity, not the separately-billed posting-search capability.
+async function testAIConnection(settings) {
+  if (!isAIConfigured(settings)) {
+    return { ok: false, error: "No AI provider configured." };
+  }
+  try {
+    const reply = await callAI(settings, { prompt: "Reply with exactly the single word OK and nothing else.", maxTokens: 10 });
+    return { ok: true, reply: reply.trim().slice(0, 60) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 module.exports = {
   callAI,
   callGeminiWithSearch,
+  testAIConnection,
   isAIConfigured,
   isAnthropicSearchConfigured,
   isGeminiSearchConfigured,
