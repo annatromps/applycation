@@ -4,6 +4,7 @@ const path = require("path");
 const db = require("./db");
 const scheduler = require("./scheduler");
 const { scoreJobFully } = require("./jobScoring");
+const { resolvePostingForJob } = require("./postingResolver");
 
 const app = express();
 app.use(cors());
@@ -19,19 +20,35 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 
 const PORT = process.env.PORT || 3000;
 
-// One-time, fully automatic pass over existing jobs that are missing a score
-// (added before scoring existed, imported manually, etc.) — runs on every
-// startup so there is never a manual "rescore" step. Only touches jobs that
-// are actually missing something; cheap and safe to run every restart.
-// Deliberately fire-and-forget, run AFTER the server is already listening —
-// it must never be able to delay or block startup (an AI provider hiccup
-// here should never look like the app being down).
+// One-time, fully automatic pass over existing jobs that are missing a
+// score and/or a real posting URL (added before scoring existed, imported
+// manually from a screenshot/notes, etc.) — runs on every startup so there
+// is never a manual "rescore" or "go find this myself" step. Only touches
+// jobs that are actually missing something; cheap and safe to run every
+// restart. Deliberately fire-and-forget, run AFTER the server is already
+// listening — it must never be able to delay or block startup (an AI
+// provider hiccup, or a slow Greenhouse/Lever lookup, should never look
+// like the app being down).
 async function backfillMissingScores() {
   const data = await db.read();
   const activeProfiles = (data.criteriaProfiles || []).filter((c) => c.active !== false);
   let changed = false;
 
   for (const job of data.jobs) {
+    // Try to find a real posting URL/description first (see
+    // server/postingResolver.js) — free public Greenhouse/Lever board
+    // lookups, no scraping, nothing for you to approve per job. If this
+    // finds something, the scoring pass right after picks up the new
+    // description too.
+    if (!job.url) {
+      const found = await resolvePostingForJob({ title: job.title, company: job.company });
+      if (found) {
+        job.url = found.url;
+        if (!job.description) job.description = found.description;
+        changed = true;
+      }
+    }
+
     const missingMatch = job.score == null && job.matchedCriteriaId == null && activeProfiles.length > 0;
     const missingEase = job.submissionEaseScore == null && Boolean(job.description || job.url);
     if (!missingMatch && !missingEase) continue;
@@ -73,7 +90,7 @@ async function backfillMissingScores() {
 
   if (changed) {
     await db.write(data);
-    console.log("[backfill] Filled in missing scores for existing jobs.");
+    console.log("[backfill] Filled in missing scores/posting links for existing jobs.");
   }
 }
 

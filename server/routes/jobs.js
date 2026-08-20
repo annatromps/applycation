@@ -5,6 +5,7 @@ const db = require("./../db");
 const { runDiscoveryCycle } = require("./../discovery");
 const { buildMaterialsForJob } = require("./../docgen/materials");
 const { scoreJobFully } = require("./../jobScoring");
+const { resolvePostingForJob } = require("./../postingResolver");
 
 const VALID_STATUSES = [
   "discovered", "reviewing", "approved", "materials_ready",
@@ -52,6 +53,13 @@ router.get("/:id", async (req, res) => {
 // rather than a permanent "–/10". See server/jobScoring.js for the shared
 // scoring logic (also used when you edit a job's details, and to backfill
 // older jobs at startup) — there's no manual "rescore" step anywhere.
+//
+// If you didn't paste a posting URL, this also automatically tries to find
+// the real one via server/postingResolver.js (free public Greenhouse/Lever
+// board APIs, matched by title+company) before scoring — so a job added
+// with just a title and company can still end up with a real link and
+// description, with nothing for you to click. Silently does nothing when
+// no confident match is found (never fabricates a URL).
 router.post("/", async (req, res) => {
   const { title, company, location, url, status, notes, salary, description, source } = req.body || {};
   if (!title || !company) {
@@ -64,14 +72,24 @@ router.post("/", async (req, res) => {
   const now = new Date().toISOString();
   const initialStatus = status || "reviewing";
 
+  let resolvedUrl = url || "";
+  let resolvedDescription = description || "";
+  if (!resolvedUrl) {
+    const found = await resolvePostingForJob({ title, company });
+    if (found) {
+      resolvedUrl = found.url;
+      if (!resolvedDescription) resolvedDescription = found.description;
+    }
+  }
+
   const jobForScoring = {
     title,
     company,
     location: location || "",
     remote: false,
     salary: salary || "",
-    description: description || "",
-    url: url || "",
+    description: resolvedDescription,
+    url: resolvedUrl,
   };
 
   const scoreFields = await scoreJobFully(jobForScoring, data);
@@ -83,8 +101,8 @@ router.post("/", async (req, res) => {
     location: location || "",
     remote: false,
     salary: salary || "",
-    description: description || "",
-    url: url || "",
+    description: resolvedDescription,
+    url: resolvedUrl,
     source: source || "manual",
     sourceId: crypto.randomUUID(),
     ...scoreFields,
@@ -155,6 +173,41 @@ router.patch("/:id", async (req, res) => {
   await db.write(data);
   const { materials, ...rest } = job;
   res.json({ ...rest, materials: publicMaterials(materials) });
+});
+
+// On-demand retry of the automatic posting lookup (see
+// server/postingResolver.js) for a job that still has no URL — e.g. the
+// slug guess didn't land at add-time, or you've since fixed a typo in the
+// company name. Only fills in url/description if it was genuinely missing;
+// never overwrites something already on file. Returns found: false rather
+// than an error when nothing confident turns up — that's an expected,
+// non-exceptional outcome, not every company is on Greenhouse or Lever.
+router.post("/:id/find-posting", async (req, res) => {
+  const data = await db.read();
+  const job = data.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "not found" });
+  if (job.url) return res.json({ found: false, reason: "Job already has a posting URL." });
+
+  const found = await resolvePostingForJob({ title: job.title, company: job.company });
+  if (!found) return res.json({ found: false });
+
+  job.url = found.url;
+  if (!job.description) job.description = found.description;
+
+  const jobForScoring = {
+    title: job.title,
+    company: job.company,
+    location: job.location || "",
+    remote: Boolean(job.remote),
+    salary: job.salary || "",
+    description: job.description || "",
+    url: job.url || "",
+  };
+  Object.assign(job, await scoreJobFully(jobForScoring, data));
+
+  await db.write(data);
+  const { materials, ...rest } = job;
+  res.json({ found: true, resolvedVia: found.resolvedVia, ...rest, materials: publicMaterials(materials) });
 });
 
 router.post("/discover", async (req, res) => {

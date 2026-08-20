@@ -93,12 +93,31 @@ function guessCompanyDomain(company) {
   return `${String(company || "").toLowerCase().replace(/[^a-z0-9]+/g, "")}.com`;
 }
 
+// Two logo services tried in order before giving up and showing initials —
+// Clearbit's free logo endpoint has gotten unreliable (frequently returns
+// nothing at all now), so Google's favicon service is tried next since it's
+// still consistently available; only after both fail does it fall back to
+// the plain initial-letter avatar. window.__logoFallback (defined once,
+// used by every rendered logo <img>) tracks which tier each image is on via
+// a data attribute, since inline onerror can't hold that state itself.
+window.__logoFallback = function (img) {
+  const stage = Number(img.dataset.stage || "0");
+  const domain = img.dataset.domain || "";
+  if (stage === 0 && domain) {
+    img.dataset.stage = "1";
+    img.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`;
+  } else {
+    img.style.display = "none";
+    if (img.nextElementSibling) img.nextElementSibling.style.display = "flex";
+  }
+};
+
 function companyLogoHtml(company, size = 36) {
   const domain = guessCompanyDomain(company);
   const initial = esc((String(company || "?").trim().charAt(0) || "?").toUpperCase());
   return `<span class="company-logo" style="width:${size}px;height:${size}px;">
     <img src="https://logo.clearbit.com/${esc(domain)}" alt="" loading="lazy"
-      onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+      data-domain="${esc(domain)}" data-stage="0" onerror="window.__logoFallback(this)" />
     <span class="company-logo-fallback">${initial}</span>
   </span>`;
 }
@@ -152,6 +171,26 @@ function reviewQuestionsHtml(questions) {
     <div class="rating-label">🤔 Worth thinking about before you apply</div>
     <ul>${questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>
   </div>`;
+}
+
+// Interactive follow-up to reviewQuestionsHtml, shown only in the job detail
+// modal (the compact Review Queue card just shows the questions — this needs
+// somewhere to actually act on them). Whatever you type gets appended to
+// your Candidate Profile's "Experience bank" (Settings), tagged with which
+// job/question prompted it, then materials are regenerated immediately so
+// the new context can actually feed into this job's CV/cover letter draft —
+// closing the loop instead of just displaying the question and moving on.
+function reviewAnswerBoxHtml(job) {
+  const questions = (job.materials && job.materials.reviewQuestions) || [];
+  if (!questions.length) return "";
+  return `
+    <div class="review-answer-box">
+      <label>Got examples or context for any of these? Add them here — saved to your Experience bank and used next time this job's materials are (re)generated.</label>
+      <textarea id="review-answer" placeholder="e.g. Re: paid growth campaigns — I ran a Meta Ads test at Worldpay that lifted conversion 8%..."></textarea>
+      <button id="save-review-answer" class="secondary">Save &amp; regenerate materials</button>
+      <span id="review-answer-msg" class="hint"></span>
+    </div>
+  `;
 }
 
 function attachFeedbackHandlers(root, jobsById, onChange) {
@@ -480,6 +519,7 @@ async function openJobDetail(id) {
     <p><span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span> ${job.score != null ? `&nbsp; <span class="score ${scoreClass(job.score)}">Overall score ${job.score}</span>` : ""}</p>
     ${ratingsDetailHtml(job)}
     ${job.materials && job.materials.reviewQuestions && job.materials.reviewQuestions.length ? reviewQuestionsHtml(job.materials.reviewQuestions) : ""}
+    ${reviewAnswerBoxHtml(job)}
 
     <label>Was this a good match?</label>
     ${feedbackRowHtml(job)}
@@ -494,6 +534,24 @@ async function openJobDetail(id) {
     <label>Notes</label>
     <textarea id="notes">${esc(job.notes || "")}</textarea>
     <button id="save-notes" class="secondary">Save notes</button>
+
+    <div class="section-title">Posting details</div>
+    ${
+      !job.url
+        ? `<button id="find-posting" class="secondary">Try to find the real posting automatically</button>
+           <p class="hint">Checks the company's own Greenhouse/Lever job board using the title + company name — free, fully automatic, no sites for you to visit or approve. Only works if the company uses one of those and the name guess lines up; if it comes back empty, paste the link yourself below.</p>`
+        : ""
+    }
+    <label>Posting URL</label>
+    <input type="text" id="edit-url" value="${esc(job.url || "")}" placeholder="https://..." />
+    <label>Description / summary</label>
+    <textarea id="edit-description" style="min-height:100px;">${esc(job.description || "")}</textarea>
+    <div class="form-row">
+      <div><label>Location</label><input type="text" id="edit-location" value="${esc(job.location || "")}" /></div>
+      <div><label>Salary</label><input type="text" id="edit-salary" value="${esc(job.salary || "")}" /></div>
+    </div>
+    <button id="save-posting-details" class="secondary">Save posting details</button>
+    <span id="posting-details-msg" class="hint"></span>
 
     <div class="section-title">Application materials</div>
     ${
@@ -522,6 +580,74 @@ async function openJobDetail(id) {
     await api(`/jobs/${job.id}/status`, { method: "POST", body: JSON.stringify({ note: document.getElementById("notes").value }) });
     document.getElementById("detail-msg").textContent = "Notes saved.";
   });
+
+  const findPostingBtn = document.getElementById("find-posting");
+  if (findPostingBtn) {
+    findPostingBtn.addEventListener("click", async () => {
+      findPostingBtn.disabled = true;
+      findPostingBtn.textContent = "Looking…";
+      try {
+        const result = await api(`/jobs/${job.id}/find-posting`, { method: "POST" });
+        if (result.found) {
+          openJobDetail(job.id);
+        } else {
+          document.getElementById("posting-details-msg").textContent =
+            "Couldn't find it automatically — paste the link yourself below if you have it.";
+          findPostingBtn.disabled = false;
+          findPostingBtn.textContent = "Try to find the real posting automatically";
+        }
+      } catch (err) {
+        document.getElementById("posting-details-msg").textContent = `Failed: ${err.message}`;
+        findPostingBtn.disabled = false;
+        findPostingBtn.textContent = "Try to find the real posting automatically";
+      }
+    });
+  }
+  document.getElementById("save-posting-details").addEventListener("click", async () => {
+    const msg = document.getElementById("posting-details-msg");
+    msg.textContent = "Saving…";
+    try {
+      await api(`/jobs/${job.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          url: document.getElementById("edit-url").value.trim(),
+          description: document.getElementById("edit-description").value,
+          location: document.getElementById("edit-location").value.trim(),
+          salary: document.getElementById("edit-salary").value.trim(),
+        }),
+      });
+      openJobDetail(job.id);
+    } catch (err) {
+      msg.textContent = `Couldn't save: ${err.message}`;
+    }
+  });
+
+  const saveAnswerBtn = document.getElementById("save-review-answer");
+  if (saveAnswerBtn) {
+    saveAnswerBtn.addEventListener("click", async () => {
+      const text = document.getElementById("review-answer").value.trim();
+      const msg = document.getElementById("review-answer-msg");
+      if (!text) {
+        msg.textContent = "Add something first.";
+        return;
+      }
+      saveAnswerBtn.disabled = true;
+      saveAnswerBtn.textContent = "Saving…";
+      try {
+        const latest = (await api("/profile")) || {};
+        const note = `Re: ${job.title} @ ${job.company}: ${text}`;
+        const updatedBank = [latest.experienceBank, note].filter(Boolean).join("\n\n");
+        await api("/profile", { method: "PUT", body: JSON.stringify({ ...latest, experienceBank: updatedBank }) });
+        await api(`/jobs/${job.id}/generate-materials`, { method: "POST" });
+        openJobDetail(job.id);
+      } catch (err) {
+        msg.textContent = `Couldn't save: ${err.message}`;
+        saveAnswerBtn.disabled = false;
+        saveAnswerBtn.textContent = "Save & regenerate materials";
+      }
+    });
+  }
+
   const genBtn = document.getElementById("gen-materials") || document.getElementById("regen-materials");
   if (genBtn) {
     genBtn.addEventListener("click", async () => {
@@ -730,7 +856,7 @@ async function renderSettings() {
 
       <p class="hint" style="margin-top:20px;">The rest of your profile is edited as JSON for now, see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
       <textarea id="profile-json" style="min-height:260px; font-family: monospace; font-size:12px;">${esc(JSON.stringify(profile, null, 2))}</textarea>
-      <div style="margin-top:8px;"><button id="save-profile">Save profile</button><span id="profile-msg" class="hint"></span></div>
+      <div style="margin-top:8px; display:flex; justify-content:flex-end; align-items:center; gap:10px;"><span id="profile-msg" class="hint"></span><button id="save-profile">Save CV JSON</button></div>
 
       <div style="margin-top:16px;"><button id="save-settings-advanced">Save settings</button><span id="settings-msg-advanced" class="hint"></span></div>
     </details>
