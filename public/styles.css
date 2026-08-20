@@ -229,6 +229,20 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
 }
 .link-btn:hover { color: var(--accent-dark, var(--accent)); }
 
+/* "Find missing postings" summary modal — one group per reason code, each
+   listing the actual jobs affected (rather than a bare count) so there's
+   something to click through to. */
+.posting-reason-group { margin: 14px 0; }
+.posting-reason-label { margin: 0 0 6px; font-weight: 600; }
+.posting-reason-jobs { margin: 0; padding-left: 4px; list-style: none; }
+.posting-reason-jobs li { margin: 4px 0; }
+
+/* Review Queue's "Re-check against current criteria" confirm list. */
+.recheck-list { margin: 10px 0; padding-left: 4px; list-style: none; max-height: 260px; overflow-y: auto; }
+.recheck-list li { margin: 6px 0; }
+.recheck-list label { display: flex; align-items: center; gap: 8px; font-weight: normal; cursor: pointer; }
+.recheck-list input[type="checkbox"] { width: auto; }
+
 .material-preview {
   margin-top: 10px; padding: 20px 24px; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius-sm); max-height: 55vh; overflow-y: auto; font-size: 14px; line-height: 1.55;

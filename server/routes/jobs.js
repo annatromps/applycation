@@ -180,6 +180,39 @@ router.patch("/:id", async (req, res) => {
   res.json({ ...rest, materials: publicMaterials(materials) });
 });
 
+// Re-evaluates a job still awaiting review against your CURRENT criteria
+// profiles — for after you've edited a profile (tightened a location, added
+// a dealbreaker, etc.) and want to know which already-discovered jobs would
+// no longer make the cut, without waiting for the next discovery cycle.
+// Deliberately scoped to status "discovered" only: this is for un-decided
+// candidates in the Review Queue, not a general "rescore my tracked jobs"
+// tool — this app's one other rule (no manual rescore anywhere else) is
+// about not second-guessing scores on jobs you've already acted on.
+router.post("/:id/recheck-match", async (req, res) => {
+  const data = await db.read();
+  const job = data.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "not found" });
+  if (job.status !== "discovered") {
+    return res.status(400).json({ error: "Only jobs still awaiting review can be re-checked this way." });
+  }
+
+  const jobForScoring = {
+    title: job.title,
+    company: job.company,
+    location: job.location || "",
+    remote: Boolean(job.remote),
+    salary: job.salary || "",
+    description: job.description || "",
+    url: job.url || "",
+  };
+  Object.assign(job, await scoreJobFully(jobForScoring, data));
+  await db.write(data);
+
+  const stillMatches = job.score != null && job.score >= (data.settings.minScoreToSurface ?? 55);
+  const { materials, ...rest } = job;
+  res.json({ stillMatches, ...rest, materials: publicMaterials(materials) });
+});
+
 // On-demand retry of the automatic posting lookup (see
 // server/postingResolver.js) for a job that still has no URL — e.g. the
 // slug guess didn't land at add-time, or you've since fixed a typo in the

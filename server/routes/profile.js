@@ -1,5 +1,6 @@
 const express = require("express");
 const multer = require("multer");
+const mammoth = require("mammoth");
 const router = express.Router();
 const db = require("./../db");
 const { extractText } = require("./../docgen/extractText");
@@ -100,6 +101,30 @@ router.get("/cv-upload/view", async (req, res) => {
 router.get("/cv-upload/download", async (req, res) => {
   const { cvUpload } = await db.read();
   serveCvFile(cvUpload, res, "attachment");
+});
+
+// A converted-to-HTML render of the uploaded .docx, for the "View" button on
+// the Me tab. `/cv-upload/view` above sets Content-Disposition: inline, which
+// works for PDFs (browsers have a native PDF viewer) but does nothing useful
+// for Word docs — there's no in-browser Word renderer, so the browser just
+// downloads the file instead of showing it, which is exactly what looked
+// broken from the outside ("View" behaving like "Download"). This endpoint
+// exists so the frontend can render a docx CV inline in a modal instead,
+// same pattern as the generated CV/cover-letter preview in
+// server/routes/jobs.js. Not pixel-identical to the real file — use
+// "Download" for that.
+router.get("/cv-upload/preview", async (req, res) => {
+  const { cvUpload } = await db.read();
+  if (!cvUpload) return res.status(404).json({ error: "No CV uploaded yet." });
+  if (cvUpload.mimetype !== MIME_FOR_EXT[".docx"]) {
+    return res.status(400).json({ error: "Preview is only needed for Word files — PDFs already preview inline via the View link." });
+  }
+  try {
+    const { value: html } = await mammoth.convertToHtml({ buffer: Buffer.from(cvUpload.dataBase64, "base64") });
+    res.json({ html });
+  } catch (e) {
+    res.status(500).json({ error: `Couldn't render a preview: ${e.message}` });
+  }
 });
 
 // ---------- AI-assisted import into the structured profile ----------

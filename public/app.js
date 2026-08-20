@@ -239,6 +239,23 @@ function openModal(html, extraClass = "") {
   });
 }
 
+// A styled, readable stand-in for a plain browser alert() — for anything
+// with more than one short line to say, or a suggested next step, since a
+// native alert can't hold formatting or a link to where that next step
+// actually lives. `linkHtml`, if given, is rendered as its own line above
+// the closing hint — pass a real `<a>`/`<button>` with an id and wire up
+// its click handler yourself right after calling this (mirrors the pattern
+// used by discoveryZeroResultsHtml/findMissingPostingsSummaryHtml's own
+// bespoke modals, just for the simpler single-message case).
+function showMessageModal(title, bodyHtml) {
+  openModal(`
+    <span class="close-x" id="close-modal">&times;</span>
+    <h3>${esc(title)}</h3>
+    ${bodyHtml}
+  `);
+  document.getElementById("close-modal").addEventListener("click", closeModal);
+}
+
 // ---------- Job feedback (👍/👎 + optional note) ----------
 // Shared between the Review Queue and the job detail modal. Feedback is
 // stored per-job and, if you've set an AI provider + API key, gets fed into the
@@ -307,6 +324,15 @@ function attachFeedbackHandlers(root, jobsById, onChange) {
       btn.addEventListener("click", async () => {
         const rating = btn.classList.contains("active") ? null : btn.dataset.fb;
         await api(`/jobs/${id}/feedback`, { method: "POST", body: JSON.stringify({ rating }) });
+        // A 👎 on a job still awaiting review is a decision, not just a
+        // taste signal — treat it the same as hitting "Dismiss" and move it
+        // straight to the Archive, instead of leaving a thumbed-down job
+        // sitting in the Review Queue looking unresolved. Once a job has
+        // moved further (submitted/interviewing/etc.), a 👎 there is just
+        // feedback for future scoring — it doesn't touch status.
+        if (rating === "down" && job.status === "discovered") {
+          await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "dismissed" }) });
+        }
         onChange();
       });
     });
@@ -331,6 +357,7 @@ const routes = {
   dashboard: renderDashboard,
   review: renderReview,
   tracker: renderTracker,
+  archive: renderArchive,
   me: renderMe,
   settings: renderSettings,
 };
@@ -417,7 +444,10 @@ async function renderDashboard() {
       renderDashboard();
     } catch (err) {
       clearInterval(rotateLoadingMessage);
-      alert(`Discovery failed: ${err.message}`);
+      showMessageModal("Discovery run failed", `
+        <p>${esc(err.message)}</p>
+        <p class="hint">Usually a job-board or email-inbox connection hiccup — try again in a minute. If it keeps happening, check your <a href="#/settings">Settings</a> (email inbox credentials, AI provider key) for anything that looks wrong.</p>
+      `);
       btn.disabled = false;
       btn.textContent = "Run discovery now";
     }
@@ -465,11 +495,14 @@ function discoveryZeroResultsHtml(diag) {
   `;
 }
 
-// Aggregate reasonCounts (from server/postingResolver.js's `reason` codes,
-// tallied client-side in the "Find missing postings" handler) into a
-// breakdown of WHY the still-missing jobs stayed missing, instead of just a
-// found/total count. Mirrors discoveryZeroResultsHtml's approach.
-function findMissingPostingsSummaryHtml(found, total, reasonCounts) {
+// Groups the still-missing jobs by WHY they stayed missing (the `reason`
+// codes from server/postingResolver.js, attached per-job client-side in the
+// "Find missing postings" handler) and lists each job by name under its
+// reason — not just a bare count, so there's something to actually click
+// through to instead of a dead end. Mirrors discoveryZeroResultsHtml's
+// "explain the bottleneck, then link to it" approach. `results` is an array
+// of `{job, found, reasonCode}`.
+function findMissingPostingsSummaryHtml(results) {
   const LABELS = {
     no_ai_provider_configured: "Not on Greenhouse/Lever/Ashby/Recruitee, and no AI provider is set up to try a web search instead",
     ai_capped_this_run: "Not on those four platforms — AI web search was skipped (this run's cost cap was reached)",
@@ -478,20 +511,35 @@ function findMissingPostingsSummaryHtml(found, total, reasonCounts) {
     request_failed: "The request itself failed (network/API issue) — worth retrying",
     other: "Couldn't find it automatically",
   };
-  const rows = Object.entries(reasonCounts)
-    .sort((a, b) => b[1] - a[1])
-    .map(([code, count]) => `<li>${count} — ${esc(LABELS[code] || code)}</li>`)
+  const found = results.filter((r) => r.found).length;
+  const groups = {};
+  results
+    .filter((r) => !r.found)
+    .forEach((r) => {
+      (groups[r.reasonCode] = groups[r.reasonCode] || []).push(r.job);
+    });
+  const groupHtml = Object.entries(groups)
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(
+      ([code, jobs]) => `
+      <div class="posting-reason-group">
+        <p class="posting-reason-label">${esc(LABELS[code] || code)} <span class="hint">(${jobs.length})</span></p>
+        <ul class="posting-reason-jobs">
+          ${jobs.map((j) => `<li><button class="link-btn" data-open-job="${j.id}">${esc(j.company)} — ${esc(j.title)}</button></li>`).join("")}
+        </ul>
+      </div>`
+    )
     .join("");
-  const noAiConfigured = Boolean(reasonCounts.no_ai_provider_configured);
+  const noAiConfigured = Boolean(groups.no_ai_provider_configured);
   return `
     <span class="close-x" id="close-modal">&times;</span>
-    <h3>Found ${found} of ${total}</h3>
-    <ul>${rows}</ul>
+    <h3>Found ${found} of ${results.length}</h3>
+    ${groupHtml}
     <p class="hint">${
       noAiConfigured
-        ? `<a href="#" id="goto-ai-setup">Add an Anthropic or Gemini API key</a> in Settings to let a web search try the ones tier 1 can't reach — `
+        ? `<a href="#" id="goto-ai-setup">Add an Anthropic or Gemini API key</a> in Settings to let a web search try the ones tier 1 can't reach. `
         : ""
-    }open a job and paste the link in yourself under Posting details for anything that still can't be found automatically.</p>
+    }Click a job above to open it straight to Posting details and paste the link in yourself, if you have it.</p>
   `;
 }
 
@@ -613,10 +661,71 @@ async function renderReview() {
           ${sources.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("")}
         </select>
       </div>
+      <button id="recheck-criteria" class="secondary">🔄 Re-check against current criteria</button>
     </div>
     <div id="review-list"></div>
   `;
   const listEl = document.getElementById("review-list");
+
+  // If you've edited a criteria profile since these were discovered
+  // (tightened a location, added a dealbreaker, turned off remote, etc.),
+  // scores here are stale — they were computed against whatever the profile
+  // looked like at discovery time and are never silently touched again
+  // afterwards (same "always automatic, but never re-decided behind your
+  // back" rule as everywhere else in this app). This re-scores every job
+  // still awaiting review against your CURRENT profiles and shows exactly
+  // which ones would no longer clear the bar, so you can decide — nothing
+  // gets dismissed without you checking the list and confirming.
+  document.getElementById("recheck-criteria").addEventListener("click", async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    const noLongerMatch = [];
+    for (let i = 0; i < jobs.length; i++) {
+      btn.textContent = `Re-checking… (${i + 1}/${jobs.length})`;
+      try {
+        const result = await api(`/jobs/${jobs[i].id}/recheck-match`, { method: "POST" });
+        Object.assign(jobsById[jobs[i].id], result); // keep the row list's own score in sync either way
+        if (!result.stillMatches) noLongerMatch.push(jobsById[jobs[i].id]);
+      } catch (err) {
+        console.error(`Re-check failed for ${jobs[i].title} @ ${jobs[i].company}:`, err.message);
+      }
+    }
+    btn.disabled = false;
+    btn.textContent = "🔄 Re-check against current criteria";
+    draw();
+
+    if (!noLongerMatch.length) {
+      showMessageModal("Re-checked against your current criteria", `<p>All ${jobs.length} job(s) still clear your match threshold — nothing to update.</p>`);
+      return;
+    }
+    openModal(`
+      <span class="close-x" id="close-modal">&times;</span>
+      <h3>${noLongerMatch.length} of ${jobs.length} no longer match</h3>
+      <p class="hint">Scores above have already been updated. These specific jobs would no longer clear your match threshold under your current criteria — review the list and dismiss whichever ones you agree with (unchecked ones are left as-is).</p>
+      <ul class="recheck-list">
+        ${noLongerMatch
+          .map(
+            (j) => `<li><label><input type="checkbox" checked data-recheck-job="${j.id}" /> ${esc(j.company)} — ${esc(j.title)} <span class="hint">(now ${j.score ?? "—"}/100)</span></label></li>`
+          )
+          .join("")}
+      </ul>
+      <div style="margin-top:14px;">
+        <button id="confirm-dismiss-recheck">Dismiss the checked ones</button>
+        <button class="secondary" id="close-modal-2">Cancel</button>
+      </div>
+    `);
+    const close = () => closeModal();
+    document.getElementById("close-modal").addEventListener("click", close);
+    document.getElementById("close-modal-2").addEventListener("click", close);
+    document.getElementById("confirm-dismiss-recheck").addEventListener("click", async () => {
+      const checked = [...document.querySelectorAll("[data-recheck-job]:checked")].map((el) => el.dataset.recheckJob);
+      for (const id of checked) {
+        await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "dismissed" }) });
+      }
+      closeModal();
+      renderReview();
+    });
+  });
 
   const draw = () => {
     const sortKey = document.getElementById("review-sort").value;
@@ -651,7 +760,10 @@ async function renderReview() {
           }
           renderReview();
         } catch (err) {
-          alert(`Couldn't prepare materials: ${err.message}`);
+          showMessageModal("Couldn't prepare materials", `
+            <p>${esc(err.message)}</p>
+            <p class="hint">This usually means your <a href="#/me">candidate profile</a> is missing something the generator needs (e.g. no experience entries yet), or the AI provider configured under <a href="#/settings">Settings</a> is unreachable. Fix that and try "Approve" again.</p>
+          `);
           btn.disabled = false;
           btn.textContent = alreadyHasMaterials ? "Approve" : "Approve & prepare materials";
         }
@@ -688,7 +800,9 @@ const TRACKER_STATUS_GROUPS = {
 };
 
 async function renderTracker(initialFilter) {
-  const singleStatuses = ["reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"];
+  // "dismissed" is deliberately excluded here — those live in the Archive
+  // tab now instead of cluttering the Tracker's status dropdown.
+  const singleStatuses = ["reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn"];
   main.innerHTML = `
     <h2>Tracker</h2>
     <div class="filters" style="justify-content:space-between;">
@@ -710,6 +824,7 @@ async function renderTracker(initialFilter) {
       <div>
         <button id="find-missing-postings" class="secondary">🔎 Find missing postings</button>
         <button id="add-job-manually" class="secondary">+ Add job manually</button>
+        <a class="btn-pill" href="#/archive">🗄 Archive</a>
       </div>
     </div>
     <div class="card"><table id="tracker-table">
@@ -729,7 +844,7 @@ async function renderTracker(initialFilter) {
       ? allJobs.filter((j) => group.statuses.includes(j.status))
       : filterValue
       ? allJobs
-      : allJobs.filter((j) => j.status !== "discovered");
+      : allJobs.filter((j) => j.status !== "discovered" && j.status !== "dismissed");
     if (favoritesOnly) jobs = jobs.filter((j) => j.favorite);
     const tbody = document.getElementById("tracker-body");
     if (!jobs.length) {
@@ -781,35 +896,30 @@ async function renderTracker(initialFilter) {
       return;
     }
     btn.disabled = true;
-    let found = 0;
-    // Tallied by the reason code the backend actually gave for each miss
-    // (server/postingResolver.js) — turns "found 2 of 10" into an
-    // explanation of what happened to the other 8, instead of leaving every
-    // miss looking the same.
-    const reasonCounts = {};
+    // Per-job results, not just a tally — so the summary modal below can
+    // list which actual jobs stayed missing under each reason, each
+    // clickable straight through to its own Posting details field, instead
+    // of a bare count with nowhere to go.
+    const results = [];
     for (let i = 0; i < missing.length; i++) {
       btn.textContent = `Looking… (${i + 1}/${missing.length})`;
       try {
         const result = await api(`/jobs/${missing[i].id}/find-posting`, { method: "POST" });
-        if (result.found) {
-          found++;
-        } else {
-          const key = result.reasonCode || "other";
-          reasonCounts[key] = (reasonCounts[key] || 0) + 1;
-        }
+        results.push({ job: missing[i], found: Boolean(result.found), reasonCode: result.reasonCode || "other" });
       } catch (err) {
         console.error(`Find-posting failed for ${missing[i].title} @ ${missing[i].company}:`, err.message);
-        reasonCounts.request_failed = (reasonCounts.request_failed || 0) + 1;
+        results.push({ job: missing[i], found: false, reasonCode: "request_failed" });
       }
     }
     btn.disabled = false;
     btn.textContent = "🔎 Find missing postings";
     load();
+    const found = results.filter((r) => r.found).length;
     if (found === missing.length) {
       alert(`Found all ${found} missing posting${found === 1 ? "" : "s"}.`);
       return;
     }
-    openModal(findMissingPostingsSummaryHtml(found, missing.length, reasonCounts));
+    openModal(findMissingPostingsSummaryHtml(results));
     document.getElementById("close-modal").addEventListener("click", closeModal);
     const gotoAiSetup = document.getElementById("goto-ai-setup");
     if (gotoAiSetup) {
@@ -818,9 +928,62 @@ async function renderTracker(initialFilter) {
         navigateAndFocusField("#/settings", "aiProvider", { detailsId: "advanced-settings" });
       });
     }
+    document.querySelectorAll("[data-open-job]").forEach((el) => {
+      el.addEventListener("click", () => {
+        closeModal();
+        openJobDetailAtPosting(el.dataset.openJob);
+      });
+    });
   });
 
   load();
+}
+
+// ---------- Archive ----------
+// Jobs you've actively said no to — either via "Dismiss" in the Review
+// Queue, or a 👎 on a job still awaiting review (see attachFeedbackHandlers,
+// which now treats that the same as Dismiss) — live here instead of sitting
+// in the Tracker's main working list forever. Your 👍/👎 + note stay
+// attached and visible via the same feedbackRowHtml used everywhere else,
+// so it's easy to see why something was passed on later; "Restore" undoes
+// it by putting the job back in the Review Queue.
+async function renderArchive() {
+  main.innerHTML = `<h2>Archive</h2><div id="archive-body">Loading…</div>`;
+  const jobs = await api("/jobs?status=dismissed");
+  const body = document.getElementById("archive-body");
+  if (!jobs.length) {
+    body.innerHTML = `<div class="empty">Nothing dismissed yet — jobs you pass on (via "Dismiss" or a 👎 in the Review Queue) end up here instead of cluttering your Tracker.</div>`;
+    return;
+  }
+  const jobsById = Object.fromEntries(jobs.map((j) => [j.id, j]));
+  body.innerHTML = jobs
+    .map(
+      (j) => `
+    <div class="list-item job-row">
+      ${companyLogoHtml(j.company, 44)}
+      <div class="job-row-main">
+        <h4>${esc(j.company)} ${j.score != null ? `<span class="score ${scoreClass(j.score)}">Score ${j.score}/100</span>` : ""}</h4>
+        <div class="meta">${esc(j.title)} · ${esc(j.location || "—")} · discovered ${fmtDate(j.discoveredAt)}
+          ${j.url ? `&nbsp;<a class="posting-link-btn" href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
+        </div>
+        ${feedbackRowHtml(j)}
+        <button class="secondary" data-restore="${j.id}">↩️ Restore to Review Queue</button>
+        <button class="secondary" data-detail="${j.id}">Details</button>
+      </div>
+    </div>
+  `
+    )
+    .join("");
+
+  attachFeedbackHandlers(body, jobsById, renderArchive);
+
+  body.querySelectorAll("[data-restore]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      await api(`/jobs/${btn.dataset.restore}/status`, { method: "POST", body: JSON.stringify({ status: "discovered" }) });
+      renderArchive();
+    })
+  );
+  body.querySelectorAll("[data-detail]").forEach((btn) => btn.addEventListener("click", () => openJobDetail(btn.dataset.detail)));
 }
 
 // ---------- Add job manually ----------
@@ -882,6 +1045,21 @@ function openAddJobModal(onSaved) {
 }
 
 // ---------- Job detail modal ----------
+// Opens a job's detail modal already scrolled/focused to its Posting URL
+// field — used by the "Find missing postings" summary so clicking a job
+// listed there lands you exactly where you'd paste a link in by hand,
+// instead of the top of the modal. Safe to call right after openJobDetail's
+// promise resolves: the modal HTML is set synchronously inside it before
+// that promise returns, so #edit-url already exists in the DOM by then.
+async function openJobDetailAtPosting(id) {
+  await openJobDetail(id);
+  const field = document.getElementById("edit-url");
+  if (field) {
+    field.scrollIntoView({ behavior: "smooth", block: "center" });
+    field.focus();
+  }
+}
+
 async function openJobDetail(id) {
   const job = await api(`/jobs/${id}`);
   const statuses = ["discovered","reviewing","approved","materials_ready","submitted","interviewing","offer","rejected","withdrawn","dismissed"];
@@ -917,7 +1095,7 @@ async function openJobDetail(id) {
     <textarea id="notes">${esc(job.notes || "")}</textarea>
     <button id="save-notes" class="secondary">Save notes</button>
 
-    <div class="section-title">Posting details</div>
+    <div class="section-title" id="posting-details-section">Posting details</div>
     ${
       !job.url
         ? `<button id="find-posting" class="secondary">Try to find the real posting automatically</button>
@@ -1388,14 +1566,22 @@ async function renderSettings() {
         }),
       });
       if (!result.ok) {
-        alert(`Couldn't scan your inbox: ${result.error}`);
+        showMessageModal("Couldn't scan your inbox", `
+          <p>${esc(result.error)}</p>
+          <p class="hint">Double-check the email address, app password, and host fields just above, then try again.</p>
+        `);
       } else if (!result.candidates.length) {
-        alert(`Scanned ${result.scanned} recent email(s) — nothing that looked like a new job-alert sender turned up. You're probably already watching everything relevant.`);
+        showMessageModal("Nothing new found", `
+          <p>Scanned ${result.scanned} recent email(s) — nothing that looked like a new job-alert sender turned up. You're probably already watching everything relevant.</p>
+        `);
       } else {
         openSenderSuggestionsModal(result.candidates, result.scanned, result.aiFiltered);
       }
     } catch (err) {
-      alert(`Couldn't scan your inbox: ${err.message}`);
+      showMessageModal("Couldn't scan your inbox", `
+        <p>${esc(err.message)}</p>
+        <p class="hint">Double-check the email address, app password, and host fields just above, then try again.</p>
+      `);
     }
     btn.disabled = false;
     btn.textContent = originalText;
@@ -1484,7 +1670,11 @@ async function renderMe() {
             <div class="hint">Uploaded ${fmtDate(cvUpload.uploadedAt)}</div>
           </div>
           <div class="cv-file-actions">
-            <a class="btn-pill" href="/api/profile/cv-upload/view" target="_blank">View</a>
+            ${
+              cvUpload.mimetype === "application/pdf"
+                ? `<a class="btn-pill" href="/api/profile/cv-upload/view" target="_blank">View</a>`
+                : `<button class="btn-pill" id="preview-cv-btn">View</button>`
+            }
             <a class="btn-pill" href="/api/profile/cv-upload/download" target="_blank">Download</a>
             <a class="btn-pill danger" href="#" id="remove-cv">Remove</a>
           </div>
@@ -1492,7 +1682,7 @@ async function renderMe() {
         ${
           cvUpload.mimetype === "application/pdf"
             ? `<iframe src="/api/profile/cv-upload/view" style="width:100%; height:420px; border:1px solid var(--border); border-radius:8px; margin-top:14px;"></iframe>`
-            : `<p class="hint" style="margin-top:10px;">Inline preview isn't available for Word files in-browser — use View/Download above (View will prompt your system's Word viewer).</p>`
+            : ""
         }
         <div class="cv-autofill-row">
           <button id="import-from-cv" ${aiConfigured ? "" : "disabled"}>✨ Auto-fill profile from this CV (AI)</button>
@@ -1583,6 +1773,31 @@ async function renderMe() {
       msg.textContent = `Upload failed: ${err.message}`;
     }
   });
+
+  const previewCvBtn = document.getElementById("preview-cv-btn");
+  if (previewCvBtn) {
+    // Word files have no native in-browser viewer, so the plain "View" link
+    // used for PDFs just makes the browser download the file — looked
+    // exactly like "View" was broken. This renders the same bytes as HTML
+    // (via server/routes/profile.js's mammoth-based /cv-upload/preview) in
+    // a modal instead, same pattern as the generated CV/cover-letter
+    // preview in the job detail view.
+    previewCvBtn.addEventListener("click", async () => {
+      openModal(`
+        <span class="close-x" id="close-modal">&times;</span>
+        <h3>${esc(cvUpload.originalFilename)}</h3>
+        <div id="cv-preview-body" class="material-preview">Loading…</div>
+        <p class="hint">This is a plain-text-ish render for a quick read — download the file for the real formatting.</p>
+      `);
+      document.getElementById("close-modal").addEventListener("click", closeModal);
+      try {
+        const { html } = await api("/profile/cv-upload/preview");
+        document.getElementById("cv-preview-body").innerHTML = html;
+      } catch (err) {
+        document.getElementById("cv-preview-body").innerHTML = `<p class="hint">Couldn't load preview: ${esc(err.message)}</p>`;
+      }
+    });
+  }
 
   const removeCvLink = document.getElementById("remove-cv");
   if (removeCvLink) {
