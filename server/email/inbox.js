@@ -1,21 +1,24 @@
-// Polls an IMAP inbox for new LinkedIn job-alert digest emails. Only ever
-// reads mail already sitting in an inbox you've explicitly connected in
-// Settings > Advanced > LinkedIn digest import — it never fetches anything
-// from linkedin.com itself. Marks processed emails as \Seen so the same
-// digest isn't imported twice; never deletes or moves anything.
+// Polls an IMAP inbox for new job-alert digest emails — from LinkedIn,
+// Indeed, Welcome to the Jungle, Wellfound, or any other job site you've
+// pointed senderFilter at (see below). Only ever reads mail already sitting
+// in an inbox you've explicitly connected in Settings > Advanced >
+// "Job-alert email import" — it never fetches anything from any job site
+// directly. Marks processed emails as \Seen so the same digest isn't
+// imported twice; never deletes or moves anything.
 
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 
 // senderFilter is a single string in settings, but supports multiple
-// comma-separated addresses/domains so one Gmail app password can watch for
-// several kinds of LinkedIn email at once (LinkedIn sends job alerts from
-// more than one address, and it changes over time). Left at the default of
-// just "linkedin.com" it matches ANY mail from LinkedIn's domain — a
+// comma-separated addresses/domains so one inbox + app password can watch
+// for job digests from several different sites at once — e.g.
+// "linkedin.com, indeed.com, welcometothejungle.com". Left at the default
+// of just "linkedin.com" it matches ANY mail from LinkedIn's domain — a
 // deliberate catch-all so you don't have to know their exact sender
-// addresses; server/email/parseDigest.js cheaply skips anything that
-// doesn't actually contain a job listing link, so a broad filter here costs
-// nothing beyond one extra IMAP fetch per non-job LinkedIn email.
+// addresses (which change over time); add whichever other job sites you get
+// alert emails from to the list, and server/email/parseDigest.js cheaply
+// skips anything that doesn't actually look like a job digest, so a broad
+// filter here costs nothing beyond one extra IMAP fetch per non-job email.
 function parseSenderList(senderFilter) {
   return String(senderFilter || "linkedin.com")
     .split(/[,\n]/)

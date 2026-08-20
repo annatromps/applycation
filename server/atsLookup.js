@@ -17,8 +17,9 @@
 // nothing confident turns up here, callers get null back — never a guess.
 //
 // Used by:
-//   - server/email/resolveApplyLink.js (LinkedIn digest import — falls
-//     back to the original LinkedIn link if nothing is found here)
+//   - server/email/resolveApplyLink.js (job-alert email digest import —
+//     falls back to the original link from the digest email if nothing is
+//     found here)
 //   - server/postingResolver.js (any job with NO known link at all —
 //     manually added, imported, or backfilled — returns null if nothing is
 //     found, since there's no original link to fall back to)

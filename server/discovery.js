@@ -5,7 +5,7 @@ const { scoreJob, scoreJobWithAI, buildFeedbackContext, scoreSubmissionEaseFull 
 const { buildMaterialsForJob } = require("./docgen/materials");
 const { sendNotification } = require("./notify");
 const { isAIConfigured } = require("./ai/client");
-const { discoverFromLinkedInDigests } = require("./email/linkedinDigest");
+const { discoverFromEmailDigests } = require("./email/digestImport");
 
 const AI_PRESCREEN_THRESHOLD = 35; // don't bother spending an AI call on jobs the rules already hate
 
@@ -27,14 +27,17 @@ async function runDiscoveryCycle() {
   // time instead of just displaying the feedback back at you.
   const feedbackContext = buildFeedbackContext(data.jobs);
 
-  // LinkedIn job-alert digest import (optional, off by default — see
-  // Settings > Advanced > LinkedIn digest import). Fetched once per cycle,
-  // not per criteria profile, so each new email is only read/marked-seen
-  // once regardless of how many active profiles you have.
+  // Job-alert email digest import (optional, off by default — see
+  // Settings > Advanced > "Job-alert email import"). Works for LinkedIn,
+  // Indeed, Welcome to the Jungle, Wellfound, or any other job site whose
+  // alert emails land in the connected inbox — see email/inbox.js's
+  // senderFilter. Fetched once per cycle, not per criteria profile, so each
+  // new email is only read/marked-seen once regardless of how many active
+  // profiles you have.
   let digestJobs = [];
   if (data.settings.emailInbox && data.settings.emailInbox.enabled) {
     try {
-      const digestResult = await discoverFromLinkedInDigests(data.settings);
+      const digestResult = await discoverFromEmailDigests(data.settings);
       digestJobs = digestResult.jobs;
       // Recorded on every run (success or failure) so the Settings health
       // indicator reflects real, recent usage rather than a synthetic ping —
@@ -47,7 +50,7 @@ async function runDiscoveryCycle() {
         jobsFound: digestResult.jobs.length,
       };
     } catch (e) {
-      console.error("[discovery] LinkedIn digest import failed for this cycle:", e.message);
+      console.error("[discovery] Job-alert email import failed for this cycle:", e.message);
       data.meta.emailInboxHealth = {
         status: "error",
         checkedAt: new Date().toISOString(),

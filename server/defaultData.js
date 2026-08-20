@@ -20,9 +20,11 @@ function defaultData() {
       maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)
       coverLetterInstructions: "", // free-text prompt fed to the AI-assisted cover letter drafter (server/docgen/coverLetter.js) — tone/emphasis preferences, e.g. "keep it under 200 words" or "lead with enthusiasm for the mission, not just the skills match". Only used when an AI provider is configured; template mode ignores it.
       timezone: "Europe/Madrid",
-      // Optional: import LinkedIn job-alert digest emails via IMAP. Only
-      // ever reads mail already sent to this inbox — never fetches
-      // anything from linkedin.com itself. See server/email/.
+      // Optional: import job-alert digest emails via IMAP — LinkedIn,
+      // Indeed, Welcome to the Jungle, Wellfound, or any other job site
+      // that emails you listings. Only ever reads mail already sent to
+      // this inbox — never fetches anything from any job site itself. See
+      // server/email/.
       emailInbox: {
         enabled: false,
         host: "imap.gmail.com",
@@ -32,10 +34,11 @@ function defaultData() {
         appPassword: "", // a Gmail "App password", not your real password
         folder: "INBOX",
         // Comma-separated list of senders/domains to watch for, all read
-        // through this one inbox + app password. Defaults to the whole
-        // "linkedin.com" domain — a catch-all so every kind of LinkedIn job
-        // digest gets picked up rather than only one specific address —
-        // narrow it to specific addresses here if you want to be pickier.
+        // through this one inbox + app password — e.g.
+        // "linkedin.com, indeed.com, welcometothejungle.com". Defaults to
+        // just the "linkedin.com" domain as a starting point (a catch-all
+        // for every kind of LinkedIn alert email, not just one address) —
+        // add any other job site you get digest emails from to the list.
         senderFilter: "linkedin.com",
       },
     },
@@ -51,9 +54,9 @@ function defaultData() {
     meta: {
       lastDiscoveryRun: null,
       appVersion: "0.1.0",
-      // Health of the LinkedIn digest import — see server/discovery.js and
-      // routes/settings.js's /email-inbox/test. null until it's been run or
-      // tested at least once.
+      // Health of the job-alert email digest import — see
+      // server/discovery.js and routes/settings.js's /email-inbox/test.
+      // null until it's been run or tested at least once.
       emailInboxHealth: null,
     },
   };

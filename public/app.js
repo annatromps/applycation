@@ -32,7 +32,7 @@ function fmtDate(iso) {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-// ---------- LinkedIn digest import health indicator ----------
+// ---------- Job-alert email import health indicator ----------
 // health is settings.emailInboxHealth (see server/defaultData.js /
 // server/discovery.js) — null until the feature has actually run or been
 // tested at least once. Updated automatically on every discovery cycle
@@ -848,11 +848,11 @@ async function renderSettings() {
       <textarea id="coverLetterInstructions" placeholder="e.g. keep it under 200 words; lead with enthusiasm for the mission before the skills match; slightly more formal tone for corporate/enterprise companies">${esc(settings.coverLetterInstructions || "")}</textarea>
       <p class="hint">Free text — tone, length, structure, whatever preferences you want the AI-assisted cover letter drafter (see "Optional: AI-assisted scoring &amp; cover letter drafting" above) to keep in mind for every letter it writes. Only used when an AI provider is configured above; template mode (no provider) ignores it. This is separate from the "Experience bank" on the <a href="#/me">Me</a> tab, which is source material, not instructions.</p>
 
-      <div class="section-title">Optional: LinkedIn digest import</div>
-      <p class="hint">Since LinkedIn has no public jobs API and scraping it breaks their terms of service, this app never touches linkedin.com directly. Instead, it can read LinkedIn's own alert emails from an inbox you connect below, and try to resolve each listing to the employer's own posting (falling back to the LinkedIn link when it can't). Needs a Gmail-style <strong>App password</strong> (Google Account &rarr; Security &rarr; App passwords) — not your real password.</p>
+      <div class="section-title">Optional: Job-alert email import</div>
+      <p class="hint">None of the big job sites (LinkedIn, Indeed, and others) offer a free public jobs API, and scraping any of them breaks their terms of service, so this app never touches any job site directly. Instead, it can read job-alert emails from an inbox you connect below — LinkedIn's, Indeed's, Welcome to the Jungle's, Wellfound's, or any other job site that emails you listings — and try to resolve each one to the employer's own posting (falling back to the original link from the email when it can't). Needs a Gmail-style <strong>App password</strong> (Google Account &rarr; Security &rarr; App passwords) — not your real password. One inbox + one app password covers every site you add below.</p>
       <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
         <input type="checkbox" id="emailInboxEnabled" ${emailInbox.enabled ? "checked" : ""} style="width:auto;" />
-        Import LinkedIn digest emails from a connected inbox
+        Import job-alert emails from a connected inbox
       </label>
       <div id="email-inbox-health" style="margin:8px 0 4px;">${emailHealthHtml(settings.emailInboxHealth)}</div>
       <div class="form-row">
@@ -871,11 +871,11 @@ async function renderSettings() {
           <input type="text" id="emailInboxHost" value="${esc(emailInbox.host || "imap.gmail.com")}" />
         </div>
         <div>
-          <label>Senders/domains to watch for (comma-separated)</label>
-          <input type="text" id="emailInboxSender" value="${esc(emailInbox.senderFilter || "linkedin.com")}" placeholder="linkedin.com" />
+          <label>Job sites to watch for (comma-separated senders/domains)</label>
+          <input type="text" id="emailInboxSender" value="${esc(emailInbox.senderFilter || "linkedin.com")}" placeholder="linkedin.com, indeed.com, welcometothejungle.com" />
         </div>
       </div>
-      <p class="hint">Defaults to the whole "linkedin.com" domain, which catches every kind of LinkedIn alert email LinkedIn might send — anything without an actual job link in it is skipped for free, so this is safe to leave broad. Add specific addresses (comma-separated) instead if you'd rather narrow it down, all read through this same one inbox + app password.</p>
+      <p class="hint">Add every job site you get alert/digest emails from here, comma-separated — e.g. "linkedin.com, indeed.com, welcometothejungle.com, wellfound.com". A whole domain like "linkedin.com" is a catch-all for every kind of alert email that site sends; anything fetched that turns out not to actually contain a job listing is skipped for free, so it's safe to leave broad rather than guessing exact sender addresses.</p>
       <div style="margin-top:10px;"><button type="button" id="test-email-inbox" class="secondary">Test connection</button></div>
 
       <div style="margin-top:16px;"><button id="save-settings-advanced">Save settings</button><span id="settings-msg-advanced" class="hint"></span></div>
@@ -1047,12 +1047,12 @@ async function renderMe() {
       <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || `<p class="empty">No criteria profiles yet — add one to start discovering jobs.</p>`}</div>
     </div>
 
-    <div class="card">
-      <h3>Candidate profile (full JSON)</h3>
+    <details class="card advanced-settings" id="profile-json-details">
+      <summary>Candidate profile (full JSON)</summary>
       <p class="hint">The rest of your profile is edited as JSON for now — see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
       <textarea id="profile-json" style="min-height:260px; font-family: monospace; font-size:12px;">${esc(JSON.stringify(profile, null, 2))}</textarea>
       <div style="margin-top:8px; display:flex; justify-content:flex-end; align-items:center; gap:10px;"><span id="profile-msg" class="hint"></span><button id="save-profile">Save CV JSON</button></div>
-    </div>
+    </details>
   `;
 
   document.getElementById("save-profile").addEventListener("click", async () => {
@@ -1122,7 +1122,8 @@ async function renderMe() {
       try {
         const draft = await api("/profile/import-from-cv", { method: "POST" });
         document.getElementById("profile-json").value = JSON.stringify(draft, null, 2);
-        msg.textContent = 'Draft imported into the "Candidate profile" JSON box below — review it, then hit "Save CV JSON" to apply it.';
+        document.getElementById("profile-json-details").open = true;
+        msg.textContent = 'Draft imported into the "Candidate profile (full JSON)" section below — expand it, review the draft, then hit "Save CV JSON" to apply it.';
         document.getElementById("profile-json").scrollIntoView({ behavior: "smooth" });
       } catch (err) {
         msg.textContent = `Import failed: ${err.message}`;
