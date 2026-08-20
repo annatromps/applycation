@@ -467,7 +467,7 @@ async function renderTracker(initialFilter) {
       </div>
     </div>
     <div class="card"><table id="tracker-table">
-      <thead><tr><th></th><th>Company</th><th>Role</th><th>Status</th><th>Score /100</th><th>Discovered</th><th>Applied</th><th>Notes</th><th></th></tr></thead>
+      <thead><tr><th>Company</th><th>Role</th><th>Status</th><th>Score /100</th><th>Discovered</th><th>Applied</th><th>Notes</th><th></th><th></th></tr></thead>
       <tbody id="tracker-body"><tr><td colspan="9">Loading…</td></tr></tbody>
     </table></div>
   `;
@@ -494,9 +494,6 @@ async function renderTracker(initialFilter) {
       .map(
         (j) => `
       <tr data-job-id="${j.id}">
-        <td class="fav-cell"><button class="star-btn ${j.favorite ? "active" : ""}" data-fav="${j.id}" title="${
-          j.favorite ? "Remove favourite" : "Mark as favourite"
-        }" onclick="event.stopPropagation();">${j.favorite ? "★" : "☆"}</button></td>
         <td class="company-cell">${companyLogoHtml(j.company, 24)}<strong>${esc(j.company)}</strong></td>
         <td>${esc(j.title)}</td>
         <td><span class="badge ${j.status}">${j.status.replace(/_/g, " ")}</span></td>
@@ -507,6 +504,9 @@ async function renderTracker(initialFilter) {
           j.notes ? esc(j.notes) : "Add a note"
         }" onclick="event.stopPropagation();">${j.notes ? "📝" : "🗒️"}</button></td>
         <td>${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener" title="View posting" onclick="event.stopPropagation();">↗</a>` : ""}</td>
+        <td class="fav-cell"><button class="star-btn ${j.favorite ? "active" : ""}" data-fav="${j.id}" title="${
+          j.favorite ? "Remove favourite" : "Mark as favourite"
+        }" onclick="event.stopPropagation();">${j.favorite ? "★" : "☆"}</button></td>
       </tr>`
       )
       .join("");
@@ -521,17 +521,20 @@ async function renderTracker(initialFilter) {
   // every job in the Tracker still missing a URL, one at a time, so it's
   // one click instead of opening each job individually. Best-effort by
   // nature — only finds a posting for companies actually on Greenhouse,
-  // Lever, Ashby, or Recruitee with a slug that matches their name; jobs on
-  // Workday/iCIMS/a custom careers site etc. will still need a link pasted
-  // in manually, and this button says so plainly in the summary.
+  // Lever, Ashby, or Recruitee with a slug that matches their name (tier 1),
+  // or that a grounded AI web search can find (tier 2, Anthropic only,
+  // needs a provider + key set below). The completion message checks
+  // whether tier 2 is actually configured rather than just saying "(if
+  // configured)" — no point being vague when we know the real answer.
   document.getElementById("find-missing-postings").addEventListener("click", async (e) => {
     const btn = e.target;
-    const allJobs = await api("/jobs");
+    const [allJobs, settings] = await Promise.all([api("/jobs"), api("/settings")]);
     const missing = allJobs.filter((j) => !j.url && j.status !== "dismissed");
     if (!missing.length) {
       alert("Every job in your Tracker already has a posting link.");
       return;
     }
+    const aiWebSearchOn = settings.aiProvider === "anthropic" && Boolean(settings.aiApiKey);
     btn.disabled = true;
     let found = 0;
     for (let i = 0; i < missing.length; i++) {
@@ -545,13 +548,22 @@ async function renderTracker(initialFilter) {
     }
     btn.disabled = false;
     btn.textContent = "🔎 Find missing postings";
-    alert(
-      `Found ${found} of ${missing.length} missing posting${missing.length === 1 ? "" : "s"}.` +
-        (found < missing.length
-          ? " Couldn't find the rest even with an AI web search (if configured) — open each job and paste the link in yourself under Posting details."
-          : "")
-    );
     load();
+    if (found === missing.length) {
+      alert(`Found all ${found} missing posting${found === 1 ? "" : "s"}.`);
+    } else if (aiWebSearchOn) {
+      alert(
+        `Found ${found} of ${missing.length} missing posting${missing.length === 1 ? "" : "s"} — checked the free ATS lookup and an AI web search for each. The rest genuinely couldn't be found either way; open each job and paste the link in yourself under Posting details.`
+      );
+    } else {
+      openModal(`
+        <span class="close-x" id="close-modal">&times;</span>
+        <h3>Found ${found} of ${missing.length}</h3>
+        <p>The rest aren't on Greenhouse, Lever, Ashby, or Recruitee — and AI web search isn't set up, so that fallback wasn't tried. <a href="#/settings" id="goto-ai-setup">Add an Anthropic API key</a> under Settings → Advanced to let it search the web for these automatically next time, or open each job now and paste the link in yourself under Posting details.</p>
+      `);
+      document.getElementById("close-modal").addEventListener("click", closeModal);
+      document.getElementById("goto-ai-setup").addEventListener("click", closeModal);
+    }
   });
 
   load();
@@ -878,8 +890,8 @@ async function renderSettings() {
       <input type="number" id="maxMaterialsGeneratedPerCycle" min="0" value="${settings.maxMaterialsGeneratedPerCycle ?? 20}" />
       <p class="hint">If AI-assisted cover-letter drafting is on (see below), each generation is an API call — this caps spend per run. Anything skipped by the cap can still be generated manually from the job's detail view.</p>
 
-      <div class="section-title">Optional: AI-assisted scoring &amp; cover letter drafting</div>
-      <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, more natural cover-letter drafting, CV auto-fill, and the CV tailoring summary. Leave provider as "None" to use plain rule-based scoring and template drafting instead — everything works fully without this. Groq and Gemini both have genuinely free tiers (no card required) if you don't want to pay for Anthropic credits.</p>
+      <div class="section-title">Optional: AI-assisted scoring, drafting &amp; posting lookup</div>
+      <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, more natural cover-letter drafting, CV auto-fill, the CV tailoring summary, email-digest job extraction, and — for Anthropic specifically — a real web search to find a job's actual posting page when the free ATS lookup can't (see "Automatic posting resolution" in the README). This is a completely separate thing from this chat: your app runs on Railway with no connection to any Claude conversation, so it needs its own API key here to make its own calls — pasting a key below doesn't use up or relate to anything in this chat, and vice versa. Leave provider as "None" to use plain rule-based scoring and template drafting instead — everything except the web-search posting lookup still works fully without this. Groq and Gemini both have genuinely free tiers (no card required) if you don't want to pay for Anthropic credits, though only Anthropic supports the web-search posting lookup.</p>
       <label>AI provider</label>
       <select id="aiProvider">
         ${["none","groq","gemini","anthropic"].map((p) => `<option value="${p}" ${p === aiProvider ? "selected" : ""}>${p === "none" ? "None" : p === "anthropic" ? "Anthropic (Claude) — paid" : p === "groq" ? "Groq — free" : "Google Gemini — free"}</option>`).join("")}
