@@ -82,7 +82,7 @@ body {
 }
 .sidebar nav a:hover:not(.active) { background: rgba(255, 255, 255, 0.07); color: white; }
 
-.main { flex: 1; padding: 32px 40px; max-width: 1140px; }
+.main { flex: 1; padding: 32px 40px; min-width: 0; }
 .main h2 { margin-top: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
 .main h3 { font-weight: 700; letter-spacing: -0.01em; }
 
@@ -219,8 +219,24 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
   animation: slideUp 0.15s ease;
 }
 .modal h3 { margin-top: 0; }
+.modal.modal-wide { max-width: 820px; }
 .close-x { float: right; cursor: pointer; color: var(--grey); font-size: 22px; line-height: 1; transition: color 0.15s ease; }
 .close-x:hover { color: var(--ink); }
+
+.link-btn {
+  background: none; border: none; padding: 0; cursor: pointer; font: inherit;
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+}
+.link-btn:hover { color: var(--accent-dark, var(--accent)); }
+
+.material-preview {
+  margin-top: 10px; padding: 20px 24px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); max-height: 55vh; overflow-y: auto; font-size: 14px; line-height: 1.55;
+}
+.material-preview p { margin: 0 0 10px; }
+.material-preview ul, .material-preview ol { margin: 0 0 10px; padding-left: 22px; }
+.material-preview h1, .material-preview h2, .material-preview h3 { margin: 16px 0 8px; }
+.material-preview h1:first-child, .material-preview h2:first-child, .material-preview h3:first-child { margin-top: 0; }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }

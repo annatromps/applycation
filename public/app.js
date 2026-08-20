@@ -146,8 +146,8 @@ function closeModal() {
   modalRoot.innerHTML = "";
 }
 
-function openModal(html) {
-  modalRoot.innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><div class="modal">${html}</div></div>`;
+function openModal(html, extraClass = "") {
+  modalRoot.innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><div class="modal ${extraClass}">${html}</div></div>`;
   document.getElementById("modal-backdrop").addEventListener("click", (e) => {
     if (e.target.id === "modal-backdrop") closeModal();
   });
@@ -680,7 +680,12 @@ async function openJobDetail(id) {
     <div class="section-title">Application materials</div>
     ${
       job.materials
-        ? `<p><a href="/api/jobs/${job.id}/materials/cv" target="_blank">Download CV</a> &nbsp;·&nbsp; <a href="/api/jobs/${job.id}/materials/cover-letter" target="_blank">Download cover letter</a></p>
+        ? `<p>
+             <button class="link-btn" data-preview="cv" data-job="${job.id}">👁️ Preview CV</button> &nbsp;·&nbsp;
+             <a href="/api/jobs/${job.id}/materials/cv" target="_blank">Download .docx</a> &nbsp;&nbsp;|&nbsp;&nbsp;
+             <button class="link-btn" data-preview="cover-letter" data-job="${job.id}">👁️ Preview cover letter</button> &nbsp;·&nbsp;
+             <a href="/api/jobs/${job.id}/materials/cover-letter" target="_blank">Download .docx</a>
+           </p>
            <button id="regen-materials" class="secondary">Regenerate</button>
            <button id="autofill-btn" class="secondary">Attempt assisted auto-fill (beta)</button>
            ${
@@ -800,6 +805,33 @@ async function openJobDetail(id) {
       autofillBtn.disabled = false;
       autofillBtn.textContent = "Attempt assisted auto-fill (beta)";
     });
+  }
+  document.querySelectorAll("[data-preview]").forEach((btn) => {
+    btn.addEventListener("click", () => previewMaterial(btn.dataset.job, btn.dataset.preview));
+  });
+}
+
+// Renders a generated CV/cover letter's content directly in a modal — a
+// converted-to-HTML view of the same .docx bytes the "Download .docx" link
+// serves (see server/routes/jobs.js's /preview endpoints), so you can check
+// wording without downloading and opening a file first. Not pixel-identical
+// to the real document — use "Download .docx" for the exact file you'd
+// actually submit somewhere.
+async function previewMaterial(jobId, kind) {
+  const label = kind === "cv" ? "CV" : "Cover letter";
+  openModal(`
+    <span class="close-x" id="close-modal">&times;</span>
+    <h3>${label} preview</h3>
+    <div id="material-preview-body" class="material-preview">Loading…</div>
+    <p class="hint">This is a plain-text-ish render for a quick read — the downloaded .docx has the real formatting.</p>
+    <p><a href="/api/jobs/${jobId}/materials/${kind}" target="_blank">Download .docx</a></p>
+  `, "modal-wide");
+  document.getElementById("close-modal").addEventListener("click", closeModal);
+  try {
+    const { html } = await api(`/jobs/${jobId}/materials/${kind}/preview`);
+    document.getElementById("material-preview-body").innerHTML = html;
+  } catch (err) {
+    document.getElementById("material-preview-body").innerHTML = `<p class="hint">Couldn't load preview: ${esc(err.message)}</p>`;
   }
 }
 

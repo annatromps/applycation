@@ -1,5 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
+const mammoth = require("mammoth");
 const router = express.Router();
 const db = require("./../db");
 const { runDiscoveryCycle } = require("./../discovery");
@@ -316,6 +317,37 @@ router.get("/:id/materials/cover-letter", async (req, res) => {
   const job = jobs.find((j) => j.id === req.params.id);
   if (!job || !job.materials) return res.status(404).json({ error: "not generated yet" });
   sendDocx(res, job.materials.coverLetterBase64, job.materials.coverLetterFilename);
+});
+
+// Read-only HTML render of a generated .docx, so the CV/cover letter can be
+// looked at right there in the job detail view instead of always having to
+// download the file first just to check it. Converts the same stored
+// base64 bytes the download endpoints above serve — nothing regenerated,
+// nothing re-scored, just a different view of the same document. Formatting
+// fidelity is "close enough to read/skim comfortably", not pixel-perfect —
+// use the "Download .docx" link for the real, exact document (e.g. to
+// actually submit it somewhere).
+async function sendDocxPreview(res, base64) {
+  try {
+    const { value: html } = await mammoth.convertToHtml({ buffer: Buffer.from(base64, "base64") });
+    res.json({ html });
+  } catch (e) {
+    res.status(500).json({ error: `Couldn't render a preview: ${e.message}` });
+  }
+}
+
+router.get("/:id/materials/cv/preview", async (req, res) => {
+  const { jobs } = await db.read();
+  const job = jobs.find((j) => j.id === req.params.id);
+  if (!job || !job.materials) return res.status(404).json({ error: "not generated yet" });
+  await sendDocxPreview(res, job.materials.cvBase64);
+});
+
+router.get("/:id/materials/cover-letter/preview", async (req, res) => {
+  const { jobs } = await db.read();
+  const job = jobs.find((j) => j.id === req.params.id);
+  if (!job || !job.materials) return res.status(404).json({ error: "not generated yet" });
+  await sendDocxPreview(res, job.materials.coverLetterBase64);
 });
 
 router.post("/:id/autofill", async (req, res) => {
