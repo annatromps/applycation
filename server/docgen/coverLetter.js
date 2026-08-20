@@ -59,6 +59,7 @@ function buildTemplateParagraphs(profile, job, talkingPoints) {
 
 async function draftWithAI({ profile, job, talkingPoints, settings }) {
   if (!isAIConfigured(settings)) return null;
+  const bank = (profile.experienceBank || "").trim();
   const prompt = [
     `Candidate summary: ${profile.summary || ""}`,
     `Candidate name: ${profile.name}`,
@@ -66,11 +67,21 @@ async function draftWithAI({ profile, job, talkingPoints, settings }) {
     `Job description: ${(job.description || "").slice(0, 4000)}`,
     `Relevant, VERIFIED-TRUE talking points to draw on (do not invent anything beyond these):`,
     ...talkingPoints.map((tp, i) => `${i + 1}. ${tp.text}`),
+    ...(bank
+      ? [
+          "",
+          "The candidate also keeps a free-form bank of additional true experience/background notes (not pre-matched to any keywords) — everything in it is real and verified, so you may pull specific, concrete examples from it too if directly relevant to this job, alongside the talking points above:",
+          bank.slice(0, 4000),
+        ]
+      : []),
     "",
     "Write the BODY of a cover letter (no salutation, no sign-off) as 2-4 short, plain, first-person paragraphs.",
-    "Cover the majority of the job posting's key requirements using only the talking points given.",
-    "Never fabricate experience not present in the talking points. Never use em dashes. Avoid generic AI-sounding phrasing.",
+    "Cover the majority of the job posting's key requirements using only the talking points and experience bank given.",
+    "Never fabricate experience not present in the material above. Never use em dashes. Avoid generic AI-sounding phrasing.",
     houseRuleNote(profile.houseRules),
+    ...(settings.coverLetterInstructions && settings.coverLetterInstructions.trim()
+      ? [`Candidate's own instructions for how you write this — follow these: ${settings.coverLetterInstructions.trim()}`]
+      : []),
   ].join("\n");
 
   try {

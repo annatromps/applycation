@@ -50,7 +50,7 @@ function ratingsBadgesHtml(j) {
   const cf = toTen(j.candidateFitScore);
   const ra = toTen(j.roleAppealScore);
   const ez = toTen(j.submissionEaseScore);
-  return `<span class="rating-badge" title="How good a match you are for this job's requirements">🎯 ${cf ?? "–"}/10</span><span class="rating-badge" title="How good this role looks for you — perks, salary, fit to your preferences">✨ ${ra ?? "–"}/10</span><span class="rating-badge" title="How quick/easy this application looks to actually submit">⚡ ${ez ?? "–"}/10</span>`;
+  return `<span class="rating-badge" title="You're a match">🎯 ${cf ?? "–"}/10</span><span class="rating-badge" title="You'll like this">✨ ${ra ?? "–"}/10</span><span class="rating-badge" title="Easy to submit">⚡ ${ez ?? "–"}/10</span>`;
 }
 
 function ratingsDetailHtml(j) {
@@ -63,12 +63,12 @@ function ratingsDetailHtml(j) {
   return `
     <div class="ratings-grid">
       <div class="rating-block">
-        <div class="rating-label">🎯 Match for requirements</div>
+        <div class="rating-label">🎯 You're a match</div>
         <div class="rating-value">${cf ?? "–"}/10</div>
         <ul class="reasons">${list(byCat.candidateFit || (j.candidateFitScore == null ? null : []))}</ul>
       </div>
       <div class="rating-block">
-        <div class="rating-label">✨ Good for you</div>
+        <div class="rating-label">✨ You'll like this</div>
         <div class="rating-value">${ra ?? "–"}/10</div>
         <ul class="reasons">${list(byCat.roleAppeal || (j.roleAppealScore == null ? null : []))}</ul>
       </div>
@@ -690,6 +690,10 @@ async function renderSettings() {
       <label>Max AI-scored jobs per discovery run (cost guard)</label>
       <input type="number" id="maxAiScoredPerCycle" min="0" value="${settings.maxAiScoredPerCycle ?? 15}" />
 
+      <label>Cover letter instructions for the AI</label>
+      <textarea id="coverLetterInstructions" placeholder="e.g. keep it under 200 words; lead with enthusiasm for the mission before the skills match; slightly more formal tone for corporate/enterprise companies">${esc(settings.coverLetterInstructions || "")}</textarea>
+      <p class="hint">Free text — tone, length, structure, whatever preferences you want the AI-assisted cover letter drafter (see "Optional: AI-assisted scoring &amp; cover letter drafting" above) to keep in mind for every letter it writes. Only used when an AI provider is configured above; template mode (no provider) ignores it. This is separate from the "Experience bank" on your Candidate Profile below, which is source material, not instructions.</p>
+
       <div class="section-title">Optional: LinkedIn digest import</div>
       <p class="hint">Since LinkedIn has no public jobs API and scraping it breaks their terms of service, this app never touches linkedin.com directly. Instead, it can read LinkedIn's own "jobs for you" alert emails from an inbox you connect below, and try to resolve each listing to the employer's own Greenhouse/Lever posting (falling back to the LinkedIn link when it can't). Needs a Gmail-style <strong>App password</strong> (Google Account &rarr; Security &rarr; App passwords) — not your real password.</p>
       <label style="display:flex; align-items:center; gap:8px; font-weight:normal;">
@@ -718,7 +722,13 @@ async function renderSettings() {
       </div>
 
       <div class="section-title">Candidate profile (CV data)</div>
-      <p class="hint">Edited as JSON for now, see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
+
+      <label>Experience bank</label>
+      <textarea id="experience-bank" style="min-height:140px;" placeholder="A running scratchpad — paste in extra achievements, projects, stats, or stories as you think of them, even ones that aren't on your CV yet. Doesn't need to be tidy. The AI can pull specific, concrete examples from here when tailoring a CV or cover letter for a job that calls for something your structured CV entries don't cover.">${esc((profile && profile.experienceBank) || "")}</textarea>
+      <p class="hint">Free text, keep adding to it over time — it's a pool of extra true examples for the AI to draw on (only used when an AI provider is configured in Advanced settings), not something that gets used word-for-word automatically. Saved separately from the JSON profile below, so you don't need to touch that to update this.</p>
+      <div style="margin-top:8px;"><button id="save-experience-bank" class="secondary">Save experience bank</button><span id="experience-bank-msg" class="hint"></span></div>
+
+      <p class="hint" style="margin-top:20px;">The rest of your profile is edited as JSON for now, see README for the shape (name, headline, summary, skills, experience, education, additional, talkingPoints, houseRules). A friendlier form editor is on the roadmap. Use "Auto-fill profile from this CV" above to draft this from your uploaded CV instead of typing it by hand.</p>
       <textarea id="profile-json" style="min-height:260px; font-family: monospace; font-size:12px;">${esc(JSON.stringify(profile, null, 2))}</textarea>
       <div style="margin-top:8px;"><button id="save-profile">Save profile</button><span id="profile-msg" class="hint"></span></div>
 
@@ -763,6 +773,7 @@ async function renderSettings() {
       aiApiKey: document.getElementById("aiApiKey").value,
       aiModel: document.getElementById("aiModel").value,
       maxAiScoredPerCycle: Number(document.getElementById("maxAiScoredPerCycle").value),
+      coverLetterInstructions: document.getElementById("coverLetterInstructions").value,
       emailInbox: {
         enabled: document.getElementById("emailInboxEnabled").checked,
         user: document.getElementById("emailInboxUser").value.trim(),
@@ -791,6 +802,22 @@ async function renderSettings() {
       msg.textContent = "Saved.";
     } catch (e) {
       msg.textContent = `Invalid JSON: ${e.message}`;
+    }
+  });
+
+  document.getElementById("save-experience-bank").addEventListener("click", async () => {
+    const msg = document.getElementById("experience-bank-msg");
+    try {
+      // Re-fetch first rather than trusting the JSON textarea's current
+      // (possibly hand-edited, unsaved) contents — this button should only
+      // ever touch experienceBank, never clobber other profile fields.
+      const latest = (await api("/profile")) || {};
+      const updated = { ...latest, experienceBank: document.getElementById("experience-bank").value };
+      await api("/profile", { method: "PUT", body: JSON.stringify(updated) });
+      document.getElementById("profile-json").value = JSON.stringify(updated, null, 2);
+      msg.textContent = "Saved.";
+    } catch (e) {
+      msg.textContent = `Couldn't save: ${e.message}`;
     }
   });
 

@@ -265,8 +265,9 @@ details.advanced-settings[open] summary { margin-bottom: 18px; }
   background: var(--accent-bg); border: 1px solid var(--border); border-radius: 999px;
   padding: 3px 10px; margin-right: 6px;
 }
-.rating-mini { margin-top: 4px; }
-.rating-mini .rating-badge { font-size: 10px; padding: 1px 7px; margin-right: 3px; }
+.rating-mini { margin-top: 4px; display: flex; flex-wrap: nowrap; gap: 3px; }
+.rating-mini .rating-badge { font-size: 9.5px; padding: 1px 5px; margin-right: 0; white-space: nowrap; }
+#tracker-table td.score { white-space: nowrap; }
 .ratings-grid { display: flex; gap: 16px; margin: 12px 0; flex-wrap: wrap; }
 .rating-block {
   flex: 1; min-width: 220px; background: var(--bg); border: 1px solid var(--border);

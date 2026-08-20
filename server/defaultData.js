@@ -18,6 +18,7 @@ function defaultData() {
       maxAiScoredPerCycle: 15, // cost guard: cap AI-assisted scoring calls per discovery run
       autoGenerateMaterials: true, // build & save a tailored CV + cover letter for every surfaced match automatically
       maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)
+      coverLetterInstructions: "", // free-text prompt fed to the AI-assisted cover letter drafter (server/docgen/coverLetter.js) — tone/emphasis preferences, e.g. "keep it under 200 words" or "lead with enthusiasm for the mission, not just the skills match". Only used when an AI provider is configured; template mode ignores it.
       timezone: "Europe/Madrid",
       // Optional: import LinkedIn job-alert digest emails via IMAP. Only
       // ever reads mail already sent to this inbox — never fetches

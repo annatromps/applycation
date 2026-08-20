@@ -17,7 +17,7 @@ async function buildMaterialsForJob(candidateProfile, job, settings) {
   const coverLetterFilename = `${candidateProfile.name} - Cover Letter - ${safeCompany}.docx`;
 
   const [cvBuf, coverLetterBuf, tailoringSummary, reviewQuestions] = await Promise.all([
-    buildCVBuffer(candidateProfile, job),
+    buildCVBuffer(candidateProfile, job, settings),
     buildCoverLetterBuffer(candidateProfile, job, settings),
     buildTailoringSummary(candidateProfile, job, settings),
     buildReviewQuestions(candidateProfile, job, settings),

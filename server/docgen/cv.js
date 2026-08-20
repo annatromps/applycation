@@ -10,6 +10,7 @@ const {
   FONT, NAVY, GREY, RULE, A4_PAGE, BULLET_NUMBERING,
   bullet, roleHeader, roleSub, sectionHeading, eduEntry,
 } = require("./style");
+const { callAI, isAIConfigured } = require("./../ai/client");
 
 const STOPWORDS = new Set([
   "the","a","an","and","or","of","to","in","on","for","with","at","by","from",
@@ -38,6 +39,44 @@ function tailorBullets(bullets, job) {
   return [...bullets].sort((a, b) => relevance(b, jobKeywords) - relevance(a, jobKeywords));
 }
 
+// The CV never invents or drops facts — see file header. This is the one
+// place that pulls in anything beyond the profile's structured `experience`
+// bullets, and it stays inside that same rule: the "experience bank" is a
+// free-text scratchpad of Anna's own true background notes (Settings ->
+// Candidate profile), and the AI here is only allowed to select/lightly trim
+// snippets that already exist in it verbatim — never combine, embellish, or
+// invent anything beyond what's literally written there. Skipped entirely
+// without an AI provider configured, since picking "what's relevant" well
+// needs real reading comprehension, not keyword matching.
+async function selectFromExperienceBank(profile, job, settings) {
+  const bank = (profile.experienceBank || "").trim();
+  if (!bank || !job || !job.description || !job.description.trim() || !isAIConfigured(settings)) return [];
+
+  const prompt = [
+    "Below is a candidate's free-form bank of additional true experience/background notes, followed by a job description.",
+    "Pick at most 2 short snippets from the bank that are directly relevant to THIS job and would strengthen a CV for it.",
+    "Each snippet you return must be a DIRECT QUOTE, or a lightly trimmed version, of text that already appears in the bank below — never invent, embellish, combine separate notes into one claim, or state anything not literally written there.",
+    "If nothing in the bank is genuinely relevant to this job, return an empty array — don't force it.",
+    'Return ONLY a JSON array of strings, no markdown fences, no commentary, e.g. ["snippet one", "snippet two"]',
+    "",
+    "CANDIDATE'S EXPERIENCE BANK:",
+    bank.slice(0, 6000),
+    "",
+    `JOB TITLE: ${job.title || ""} at ${job.company || ""}`,
+    `JOB DESCRIPTION: ${job.description.slice(0, 3000)}`,
+  ].join("\n");
+
+  try {
+    const raw = await callAI(settings, { prompt, maxTokens: 400 });
+    const jsonText = raw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const parsed = JSON.parse(jsonText);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string" && s.trim()).slice(0, 2) : [];
+  } catch (e) {
+    console.error("[cv] Experience-bank selection failed, skipping:", e.message);
+    return [];
+  }
+}
+
 /**
  * Builds the tailored CV .docx and returns it as a Buffer (does not touch
  * disk) — the primary API, so generated documents can be stored wherever
@@ -45,10 +84,14 @@ function tailorBullets(bullets, job) {
  * case) rather than assuming a writable local filesystem.
  * @param {object} profile - candidateProfile from the data store
  * @param {object|null} job - a job record to tailor bullet order against (optional)
+ * @param {object} [settings] - app settings; only used for the optional AI-assisted
+ *   experience-bank selection below (see selectFromExperienceBank) — omit or leave
+ *   AI unconfigured and the CV still builds fine, just without that section.
  * @returns {Promise<Buffer>}
  */
-async function buildCVBuffer(profile, job) {
+async function buildCVBuffer(profile, job, settings = {}) {
   const children = [];
+  const bankSnippets = await selectFromExperienceBank(profile, job, settings);
 
   children.push(
     new Paragraph({
@@ -103,6 +146,15 @@ async function buildCVBuffer(profile, job) {
       const orderedBullets = tailorBullets(role.bullets || [], job);
       for (const b of orderedBullets) children.push(bullet(b));
     }
+  }
+
+  if (bankSnippets.length) {
+    // Pulled from the Candidate Profile's free-text "experience bank" — see
+    // selectFromExperienceBank above. Kept as its own labelled section
+    // (rather than silently merged into a role's bullets) so it's always
+    // clear this came from that scratchpad, not the structured work history.
+    children.push(sectionHeading("Additional Relevant Experience"));
+    for (const s of bankSnippets) children.push(bullet(s));
   }
 
   if ((profile.education || []).length) {

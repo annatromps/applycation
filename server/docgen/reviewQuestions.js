@@ -44,6 +44,9 @@ async function aiQuestions(profile, job, settings) {
     "",
     `CANDIDATE SUMMARY: ${profile.summary || ""}`,
     `CANDIDATE EXPERIENCE: ${JSON.stringify((profile.experience || []).map((e) => ({ title: e.title, company: e.company, bullets: e.bullets })))}`,
+    ...(profile.experienceBank && profile.experienceBank.trim()
+      ? [`CANDIDATE'S ADDITIONAL NOTES (background/examples not yet written into the CV above, but real): ${profile.experienceBank.trim().slice(0, 3000)}`]
+      : []),
   ].join("\n");
 
   try {
