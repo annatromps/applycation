@@ -64,6 +64,12 @@ async function selectFromExperienceBank(profile, job, settings) {
     "",
     `JOB TITLE: ${job.title || ""} at ${job.company || ""}`,
     `JOB DESCRIPTION: ${job.description.slice(0, 3000)}`,
+    // Feedback on a previous draft of this CV (job detail view's
+    // "Regenerate" flow) — e.g. "drop the internship mention" should mean
+    // don't pick a bank snippet about it even if it would otherwise match.
+    ...(job.materialsFeedback && job.materialsFeedback.trim()
+      ? ["", `The candidate reviewed an earlier draft of this exact CV and left this feedback — take it into account when picking snippets: ${job.materialsFeedback.trim()}`]
+      : []),
   ].join("\n");
 
   try {

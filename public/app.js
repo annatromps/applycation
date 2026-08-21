@@ -1188,7 +1188,10 @@ async function openJobDetail(id) {
              <button class="link-btn" data-preview="cover-letter" data-job="${job.id}">👁️ Preview cover letter</button> &nbsp;·&nbsp;
              <a href="/api/jobs/${job.id}/materials/cover-letter" target="_blank">Download .docx</a>
            </p>
-           <button id="regen-materials" class="secondary">Regenerate</button>
+           <label>Feedback for regeneration (optional)</label>
+           <textarea id="materials-feedback" placeholder="e.g. make the cover letter punchier, drop the internship mention, lead with the leadership experience instead">${esc(job.materialsFeedback || "")}</textarea>
+           <p class="hint">Applies mainly to the cover letter's wording and any experience-bank snippets pulled into the CV — your CV's bullet order itself is picked automatically by relevance to the job, not by this. Needs an AI provider configured in Settings to actually take effect; saved either way so it's here next time.</p>
+           <button id="regen-materials" class="secondary">Regenerate with this feedback</button>
            <button id="autofill-btn" class="secondary">Attempt assisted auto-fill (beta)</button>
            ${
              job.materials.tailoringSummary
@@ -1282,14 +1285,24 @@ async function openJobDetail(id) {
   const genBtn = document.getElementById("gen-materials") || document.getElementById("regen-materials");
   if (genBtn) {
     genBtn.addEventListener("click", async () => {
+      const feedbackEl = document.getElementById("materials-feedback");
+      const oldLabel = genBtn.textContent;
       genBtn.disabled = true;
       genBtn.textContent = "Generating…";
       try {
-        await api(`/jobs/${job.id}/generate-materials`, { method: "POST" });
+        // feedbackEl only exists on "Regenerate" (materials already exist) —
+        // the first-time "Generate" button has nothing to give feedback on
+        // yet, so it just generates plain. Sent even when empty so clearing
+        // the box and regenerating actually clears the saved feedback too.
+        await api(`/jobs/${job.id}/generate-materials`, {
+          method: "POST",
+          body: JSON.stringify(feedbackEl ? { feedback: feedbackEl.value } : {}),
+        });
         openJobDetail(job.id);
       } catch (err) {
         document.getElementById("detail-msg").textContent = `Failed: ${err.message}`;
         genBtn.disabled = false;
+        genBtn.textContent = oldLabel;
       }
     });
   }

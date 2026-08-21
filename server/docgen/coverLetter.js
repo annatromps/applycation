@@ -82,6 +82,13 @@ async function draftWithAI({ profile, job, talkingPoints, settings }) {
     ...(settings.coverLetterInstructions && settings.coverLetterInstructions.trim()
       ? [`Candidate's own instructions for how you write this — follow these: ${settings.coverLetterInstructions.trim()}`]
       : []),
+    // Feedback on a PREVIOUS draft of THIS letter specifically (job detail
+    // view's "Regenerate" flow) — takes priority over the general
+    // instructions above where the two conflict, since it's more specific
+    // and more recent.
+    ...(job.materialsFeedback && job.materialsFeedback.trim()
+      ? [`The candidate reviewed an earlier draft of this exact letter and left this feedback — apply it in this version, overriding the general instructions above if they conflict: ${job.materialsFeedback.trim()}`]
+      : []),
   ].join("\n");
 
   try {

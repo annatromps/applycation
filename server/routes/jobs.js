@@ -336,6 +336,22 @@ router.post("/:id/generate-materials", async (req, res) => {
   if (!job) return res.status(404).json({ error: "not found" });
   if (!data.candidateProfile) return res.status(400).json({ error: "No candidate profile configured yet — set one up under Settings first." });
 
+  // Free-text feedback on a PREVIOUS draft (e.g. "make the cover letter
+  // punchier", "drop the internship mention") — the job-detail modal's
+  // "Regenerate" flow. Persisted on the job itself (not just this one
+  // call) so it's still there next time this job's materials are
+  // regenerated, and read by the AI-assisted parts of generation (see
+  // docgen/coverLetter.js's draftWithAI and docgen/cv.js's
+  // selectFromExperienceBank) — it's a no-op without an AI provider
+  // configured, same as coverLetterInstructions/aiPreferences elsewhere.
+  // Only touched when the field is actually present in the request body,
+  // so the automatic generation paths (discovery, manual-add) that never
+  // send it don't accidentally wipe out feedback saved from a manual
+  // regenerate.
+  if (req.body && req.body.feedback !== undefined) {
+    job.materialsFeedback = String(req.body.feedback).trim();
+  }
+
   // Stored as base64 inside the same JSON blob as everything else, rather
   // than written to local disk — keeps generated documents persistent
   // across restarts/redeploys on hosts with ephemeral filesystems.
