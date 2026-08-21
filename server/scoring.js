@@ -19,6 +19,20 @@ function anyHit(list, haystack) {
   return (list || []).filter((k) => textIncludes(haystack, k));
 }
 
+// Which work arrangements (remote / hybrid / office) a criteria profile is
+// open to — a multiselect (public/app.js's three checkboxes), stored as
+// criteria.workArrangements. Falls back to the older boolean `remoteOk`
+// field for any profile saved before this existed, so nothing already
+// saved silently breaks: remoteOk:false used to only ever mean "don't
+// specially favour remote roles" (see below), never "refuse in-person
+// roles outright", so it maps to being open to hybrid+office but not
+// remote; remoteOk:true (or the field missing entirely) maps to being
+// open to everything, matching the old effectively-unrestricted default.
+function getWorkArrangements(criteria) {
+  if (Array.isArray(criteria.workArrangements)) return criteria.workArrangements;
+  return criteria.remoteOk === false ? ["hybrid", "office"] : ["remote", "hybrid", "office"];
+}
+
 // Every rule-based signal is assigned to one of two categories, matching the
 // two ratings shown in the UI:
 //   candidateFit  — am I a good match for what THIS JOB requires (title,
@@ -134,20 +148,41 @@ function scoreJob(job, criteria) {
 
   // ---- Everything below is about whether the role is good FOR YOU ----
 
-  // Location / remote.
-  if (criteria.remoteOk && job.remote) {
-    bump(ra, 15, "Remote-friendly, matches your remote preference");
-    const remoteLocHit = anyHit(criteria.remoteLocations, job.location || "");
-    if (remoteLocHit.length) {
-      bump(ra, 5, `Remote location match: ${remoteLocHit.join(", ")}`);
+  // Location / work arrangement (remote / hybrid / office). Job boards
+  // mostly only give us a boolean job.remote — there's no separate
+  // structured signal for "hybrid" vs "fully in-office" — so "not remote"
+  // covers both here; a profile that's open to either one is scored the
+  // same way against a non-remote job, since the job data itself can't
+  // distinguish them. What the multiselect DOES let you express precisely
+  // (that a plain remoteOk boolean couldn't) is a genuine exclusion in
+  // either direction: "only remote, no in-person roles at all" or "no
+  // fully-remote roles, I want hybrid/office" — both now score as a real
+  // mismatch instead of being silently ignored.
+  const arrangements = getWorkArrangements(criteria);
+  const wantsRemote = arrangements.includes("remote");
+  const wantsInPerson = arrangements.includes("hybrid") || arrangements.includes("office");
+
+  if (job.remote) {
+    if (wantsRemote) {
+      bump(ra, 15, "Remote-friendly, matches your work-arrangement preference");
+      const remoteLocHit = anyHit(criteria.remoteLocations, job.location || "");
+      if (remoteLocHit.length) {
+        bump(ra, 5, `Remote location match: ${remoteLocHit.join(", ")}`);
+      }
+    } else if (arrangements.length) {
+      bump(ra, -15, "This role is remote, but you've said you only want hybrid/office roles");
     }
-  } else if ((criteria.locations || []).length) {
-    const locHit = criteria.locations.find((l) => textIncludes(job.location, l));
-    if (locHit) {
-      bump(ra, 15, `Location match: "${locHit}"`);
-    } else if (!job.remote) {
-      bump(ra, -15, `Location "${job.location || "unknown"}" doesn't match your target locations`);
+  } else if (wantsInPerson || !arrangements.length) {
+    if ((criteria.locations || []).length) {
+      const locHit = criteria.locations.find((l) => textIncludes(job.location, l));
+      if (locHit) {
+        bump(ra, 15, `Location match: "${locHit}"`);
+      } else {
+        bump(ra, -15, `Location "${job.location || "unknown"}" doesn't match your target locations`);
+      }
     }
+  } else if (wantsRemote) {
+    bump(ra, -20, "This role isn't remote, and you've said you only want remote work");
   }
 
   // Minimum salary — only a soft signal since postings rarely include a clean parseable figure.

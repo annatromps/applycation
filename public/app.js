@@ -1895,12 +1895,23 @@ async function renderMe() {
   }
 }
 
+// Back-compat display helper, mirrors server/scoring.js's
+// getWorkArrangements — a profile saved before the multiselect existed
+// only has the old boolean remoteOk, not workArrangements.
+function workArrangementsOf(c) {
+  if (Array.isArray(c.workArrangements)) return c.workArrangements;
+  return c.remoteOk === false ? ["hybrid", "office"] : ["remote", "hybrid", "office"];
+}
+
 function criteriaRowHtml(c) {
   const isActive = c.active !== false;
+  const arrangements = workArrangementsOf(c);
+  const arrangementLabel =
+    arrangements.length === 3 ? "remote/hybrid/office" : arrangements.length ? arrangements.join("/") : "no arrangement set";
   return `
     <div class="list-item">
       <h4>${esc(c.name || "(unnamed profile)")} ${isActive ? "" : '<span class="badge withdrawn">inactive</span>'}</h4>
-      <div class="meta">Titles: ${esc((c.titleKeywords || []).join(", ") || "—")} · Locations: ${esc((c.locations || []).join(", ") || (c.remoteOk ? "remote ok" : "—"))}</div>
+      <div class="meta">Titles: ${esc((c.titleKeywords || []).join(", ") || "—")} · Locations: ${esc((c.locations || []).join(", ") || "—")} · ${esc(arrangementLabel)}</div>
       ${c.aiPreferences ? `<div class="meta">AI preferences: "${esc(c.aiPreferences.slice(0, 140))}${c.aiPreferences.length > 140 ? "…" : ""}"</div>` : ""}
       <button class="secondary" data-toggle-criteria="${c.id}" data-active="${isActive}">${isActive ? "Deactivate" : "Activate"}</button>
       <button class="secondary" data-edit-criteria="${c.id}">Edit</button>
@@ -1948,8 +1959,9 @@ function openCriteriaEditor(c) {
     titleKeywords: [], excludeKeywords: [], locations: [], remoteLocations: [], languages: [],
     roleTypes: [], seniority: [], rolePriorities: [], sectorsInclude: [], sectorsExclude: [],
     favouriteTechnologies: [], hiddenTechnologies: [], companySizes: [], followedCompanies: [],
-    dealbreakers: [], aiPreferences: "", sources: {},
+    dealbreakers: [], aiPreferences: "", sources: {}, workArrangements: ["remote", "hybrid", "office"],
   };
+  const arrangements = workArrangementsOf(c);
   const gh = (c.sources && c.sources.greenhouse) || { enabled: false, companies: [] };
   const lv = (c.sources && c.sources.lever) || { enabled: false, companies: [] };
   openModal(`
@@ -1962,7 +1974,15 @@ function openCriteriaEditor(c) {
     <div class="section-title">Location</div>
     <div class="form-row">
       <div><label>Locations (comma-separated cities/countries you'd work in)</label><input type="text" id="c-locations" value="${esc(csv(c.locations))}" /></div>
-      <div><label><input type="checkbox" id="c-remote" ${c.remoteOk ? "checked" : ""} style="width:auto; display:inline;" /> Remote OK</label></div>
+      <div>
+        <label>Work arrangement</label>
+        <div class="checkbox-multiselect">
+          <label><input type="checkbox" id="c-arrangement-remote" ${arrangements.includes("remote") ? "checked" : ""} style="width:auto; display:inline;" /> Remote</label>
+          <label><input type="checkbox" id="c-arrangement-hybrid" ${arrangements.includes("hybrid") ? "checked" : ""} style="width:auto; display:inline;" /> Hybrid</label>
+          <label><input type="checkbox" id="c-arrangement-office" ${arrangements.includes("office") ? "checked" : ""} style="width:auto; display:inline;" /> Office</label>
+        </div>
+        <p class="hint">Uncheck "Remote" if you'd rule out fully-remote roles; uncheck both "Hybrid" and "Office" if you only want fully-remote. Job postings don't distinguish hybrid from office-based, so those two are always scored the same way — this is just about which you're each open to.</p>
+      </div>
     </div>
     <label>Remote locations (regions you can work remotely from/for, e.g. UK, EU, Worldwide)</label>
     <input type="text" id="c-remote-locations" value="${esc(csv(c.remoteLocations))}" />
@@ -2026,7 +2046,9 @@ function openCriteriaEditor(c) {
       name: document.getElementById("c-name").value,
       active: document.getElementById("c-active").checked,
       locations: fromCsv(document.getElementById("c-locations").value),
-      remoteOk: document.getElementById("c-remote").checked,
+      workArrangements: ["remote", "hybrid", "office"].filter(
+        (a) => document.getElementById(`c-arrangement-${a}`).checked
+      ),
       remoteLocations: fromCsv(document.getElementById("c-remote-locations").value),
       visaSponsorshipRequired: document.getElementById("c-visa").checked,
       languages: fromCsv(document.getElementById("c-languages").value),

@@ -16,7 +16,12 @@ router.post("/", async (req, res) => {
     name: "",
     // Location
     locations: [],
-    remoteOk: true,
+    // Multiselect: any of "remote"|"hybrid"|"office" — see
+    // server/scoring.js's getWorkArrangements for how this is matched
+    // against a job (which only ever has a boolean job.remote to check
+    // against, no separate hybrid/office signal). Defaults to all three,
+    // i.e. no restriction, matching the old remoteOk:true default.
+    workArrangements: ["remote", "hybrid", "office"],
     remoteLocations: [],
     visaSponsorshipRequired: false,
     languages: [],

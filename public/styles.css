@@ -201,6 +201,11 @@ textarea { min-height: 60px; font-family: inherit; }
 label { display: block; font-size: 13px; font-weight: 700; margin: 14px 0 5px; color: var(--ink-soft); }
 .form-row { display: flex; gap: 16px; }
 .form-row > div { flex: 1; }
+/* A row of checkboxes acting as one multiselect (e.g. criteria profile's
+   work arrangement) rather than several separate stacked settings —
+   overrides label's default block/bold styling for just these. */
+.checkbox-multiselect { display: flex; gap: 16px; flex-wrap: wrap; }
+.checkbox-multiselect label { display: flex; align-items: center; gap: 5px; font-weight: 500; margin: 0; }
 .hint { font-size: 12.5px; color: var(--grey); margin-top: 5px; line-height: 1.5; }
 
 .radio-group { display: flex; flex-direction: column; gap: 9px; margin-top: 6px; }
