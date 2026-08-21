@@ -2,10 +2,31 @@ const express = require("express");
 const crypto = require("crypto");
 const router = express.Router();
 const db = require("./../db");
+const { importCriteriaFromCV } = require("./../docgen/importCriteria");
 
 router.get("/", async (req, res) => {
   const data = await db.read();
   res.json(data.criteriaProfiles);
+});
+
+// AI-drafted starting point for a NEW profile, read from the uploaded
+// baseline CV — see server/docgen/importCriteria.js for exactly what is
+// (and deliberately isn't) inferred from it. Draft only: nothing is
+// created here — the frontend opens the criteria editor pre-filled with
+// the result and the usual POST / below only runs once the user hits Save.
+router.post("/import-from-cv", async (req, res) => {
+  const data = await db.read();
+  if (!data.cvUpload) return res.status(400).json({ error: "Upload a CV file first, on the Me tab." });
+  try {
+    const draft = await importCriteriaFromCV({
+      text: data.cvUpload.extractedText,
+      candidateProfile: data.candidateProfile,
+      settings: data.settings,
+    });
+    res.json(draft);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 router.post("/", async (req, res) => {

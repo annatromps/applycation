@@ -1861,11 +1861,24 @@ async function renderMe() {
     </div>
 
     <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
         <h3>Criteria profiles</h3>
-        <button id="add-criteria">+ Add profile</button>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button
+            id="add-criteria-from-cv"
+            class="secondary"
+            title="${!cvUpload ? "Upload a CV on this tab first" : !aiConfigured ? "Add an AI provider under Settings → Advanced first" : "Draft a new profile from your uploaded CV"}"
+            ${cvUpload && aiConfigured ? "" : "disabled"}
+          >✨ New profile from CV (AI)</button>
+          <button id="add-criteria">+ Add profile</button>
+        </div>
       </div>
-      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || emptyStateHtml("🎯", "No criteria profiles yet", `Click "+ Add profile" above to start discovering jobs automatically.`)}</div>
+      ${
+        cvUpload && !aiConfigured
+          ? `<p class="hint" style="margin-top:8px;">Add an AI provider + API key under Settings → Advanced to enable drafting a profile from your CV.</p>`
+          : ""
+      }
+      <div id="criteria-list">${criteria.map(criteriaRowHtml).join("") || emptyStateHtml("🎯", "No criteria profiles yet", `Click "+ Add profile" above to start discovering jobs automatically, or "✨ New profile from CV (AI)" to draft one from your CV first.`)}</div>
     </div>
 
     <details class="card advanced-settings" id="profile-json-details">
@@ -1904,6 +1917,26 @@ async function renderMe() {
   });
 
   document.getElementById("add-criteria").addEventListener("click", () => openCriteriaEditor(null));
+  const addFromCvBtn = document.getElementById("add-criteria-from-cv");
+  if (addFromCvBtn && !addFromCvBtn.disabled) {
+    addFromCvBtn.addEventListener("click", async () => {
+      addFromCvBtn.disabled = true;
+      const oldLabel = addFromCvBtn.textContent;
+      addFromCvBtn.textContent = "Reading your CV…";
+      try {
+        const draft = await api("/criteria/import-from-cv", { method: "POST" });
+        // Opens the same structured editor used for every profile, pre-filled
+        // with the draft — nothing is created until Save is actually clicked
+        // there (see openCriteriaEditor's isNew handling), so this is
+        // exactly as safe as starting from a blank "+ Add profile".
+        openCriteriaEditor(draft);
+      } catch (err) {
+        showMessageModal("Couldn't draft a profile from your CV", `<p>${esc(err.message)}</p>`);
+      }
+      addFromCvBtn.disabled = false;
+      addFromCvBtn.textContent = oldLabel;
+    });
+  }
   attachCriteriaHandlers();
 
   document.getElementById("upload-cv").addEventListener("click", async () => {
@@ -2039,7 +2072,10 @@ function fromCsv(str) {
 }
 
 function openCriteriaEditor(c) {
-  const isNew = !c;
+  // A CV-drafted profile (see add-criteria-from-cv above) is a full object
+  // but has no `id` yet — still a new profile that should POST on Save, not
+  // PUT to a nonexistent /criteria/undefined.
+  const isNew = !c || !c.id;
   c = c || {
     titleKeywords: [], excludeKeywords: [], locations: [], remoteLocations: [], languages: [],
     roleTypes: [], seniority: [], rolePriorities: [], sectorsInclude: [], sectorsExclude: [],
