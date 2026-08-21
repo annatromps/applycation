@@ -87,6 +87,64 @@ function scoreJob(job, criteria) {
     }
   }
 
+  // Work arrangement (remote/hybrid/office) and minimum salary are HARD
+  // requirements, not soft signals: a job that doesn't clear them is excluded
+  // entirely rather than merely scored down. This is a deliberate, narrower
+  // scope than dealbreakers-style hard-fail for every criteria field — Anna
+  // confirmed (2026-08-21) she only wants these two treated as hard filters;
+  // title keywords/seniority/sectors/technologies/company size/followed
+  // companies all stay soft signals below. See getWorkArrangements() above
+  // for why job.remote (a boolean) can only distinguish "remote" from
+  // "not remote", not hybrid from office.
+  const arrangements = getWorkArrangements(criteria);
+  if (arrangements.length) {
+    const wantsRemote = arrangements.includes("remote");
+    const wantsInPerson = arrangements.includes("hybrid") || arrangements.includes("office");
+    if (job.remote && !wantsRemote) {
+      const reason = "This role is remote, but you've said you only want hybrid/office roles";
+      return {
+        score: 0,
+        candidateFitScore: 0,
+        roleAppealScore: 0,
+        hardFail: true,
+        reasons: [reason],
+        reasonsByCategory: { candidateFit: [], roleAppeal: [reason] },
+      };
+    }
+    if (!job.remote && !wantsInPerson) {
+      const reason = "This role isn't remote, and you've said you only want remote work";
+      return {
+        score: 0,
+        candidateFitScore: 0,
+        roleAppealScore: 0,
+        hardFail: true,
+        reasons: [reason],
+        reasonsByCategory: { candidateFit: [], roleAppeal: [reason] },
+      };
+    }
+  }
+
+  // Minimum salary — only fires when the posting actually states a
+  // parseable figure (no info means no exclusion, same principle as
+  // dealbreakers only firing on an actual text match).
+  if (criteria.minSalary && job.salary) {
+    const salaryNumbers = String(job.salary).match(/\d[\d,]*/g);
+    if (salaryNumbers) {
+      const maxSalary = Math.max(...salaryNumbers.map((n) => Number(n.replace(/,/g, ""))));
+      if (maxSalary && maxSalary < criteria.minSalary) {
+        const reason = `Posted salary (${job.salary}) is below your minimum (${criteria.minSalary})`;
+        return {
+          score: 0,
+          candidateFitScore: 0,
+          roleAppealScore: 0,
+          hardFail: true,
+          reasons: [reason],
+          reasonsByCategory: { candidateFit: [], roleAppeal: [reason] },
+        };
+      }
+    }
+  }
+
   // Title keyword match (what you actually want to be called) — are you the
   // kind of candidate this role is looking for?
   const titleHits = anyHit(criteria.titleKeywords, title);
@@ -148,51 +206,25 @@ function scoreJob(job, criteria) {
 
   // ---- Everything below is about whether the role is good FOR YOU ----
 
-  // Location / work arrangement (remote / hybrid / office). Job boards
-  // mostly only give us a boolean job.remote — there's no separate
-  // structured signal for "hybrid" vs "fully in-office" — so "not remote"
-  // covers both here; a profile that's open to either one is scored the
-  // same way against a non-remote job, since the job data itself can't
-  // distinguish them. What the multiselect DOES let you express precisely
-  // (that a plain remoteOk boolean couldn't) is a genuine exclusion in
-  // either direction: "only remote, no in-person roles at all" or "no
-  // fully-remote roles, I want hybrid/office" — both now score as a real
-  // mismatch instead of being silently ignored.
-  const arrangements = getWorkArrangements(criteria);
-  const wantsRemote = arrangements.includes("remote");
-  const wantsInPerson = arrangements.includes("hybrid") || arrangements.includes("office");
-
+  // Location / work arrangement (remote / hybrid / office). The hard-fail
+  // check above already guarantees the job clears your work-arrangement
+  // requirement by this point, so what's left here is purely upside: extra
+  // positive signal when a remote job also hits a preferred remote
+  // location, or when an in-person job hits a preferred city. A city
+  // mismatch on an in-person job is a soft signal (not a hard filter, per
+  // Anna's confirmed scope), unlike the arrangement check itself.
   if (job.remote) {
-    if (wantsRemote) {
-      bump(ra, 15, "Remote-friendly, matches your work-arrangement preference");
-      const remoteLocHit = anyHit(criteria.remoteLocations, job.location || "");
-      if (remoteLocHit.length) {
-        bump(ra, 5, `Remote location match: ${remoteLocHit.join(", ")}`);
-      }
-    } else if (arrangements.length) {
-      bump(ra, -15, "This role is remote, but you've said you only want hybrid/office roles");
+    bump(ra, 15, "Remote-friendly, matches your work-arrangement preference");
+    const remoteLocHit = anyHit(criteria.remoteLocations, job.location || "");
+    if (remoteLocHit.length) {
+      bump(ra, 5, `Remote location match: ${remoteLocHit.join(", ")}`);
     }
-  } else if (wantsInPerson || !arrangements.length) {
-    if ((criteria.locations || []).length) {
-      const locHit = criteria.locations.find((l) => textIncludes(job.location, l));
-      if (locHit) {
-        bump(ra, 15, `Location match: "${locHit}"`);
-      } else {
-        bump(ra, -15, `Location "${job.location || "unknown"}" doesn't match your target locations`);
-      }
-    }
-  } else if (wantsRemote) {
-    bump(ra, -20, "This role isn't remote, and you've said you only want remote work");
-  }
-
-  // Minimum salary — only a soft signal since postings rarely include a clean parseable figure.
-  if (criteria.minSalary && job.salary) {
-    const numbers = String(job.salary).match(/\d[\d,]*/g);
-    if (numbers) {
-      const maxNum = Math.max(...numbers.map((n) => Number(n.replace(/,/g, ""))));
-      if (maxNum && maxNum < criteria.minSalary) {
-        bump(ra, -15, `Posted salary (${job.salary}) looks below your minimum (${criteria.minSalary})`);
-      }
+  } else if ((criteria.locations || []).length) {
+    const locHit = criteria.locations.find((l) => textIncludes(job.location, l));
+    if (locHit) {
+      bump(ra, 15, `Location match: "${locHit}"`);
+    } else {
+      bump(ra, -15, `Location "${job.location || "unknown"}" doesn't match your target locations`);
     }
   }
 

@@ -218,6 +218,10 @@ function navigateAndOpenCriteriaField(fieldId) {
       if (editBtn) {
         clicked = true;
         editBtn.click();
+        // No specific field to scroll to — just opening the editor is enough
+        // (e.g. when a hard-fail count could come from more than one field:
+        // dealbreakers, work arrangement, or minimum salary).
+        if (!fieldId) return;
       }
     } else {
       const field = document.getElementById(fieldId);
@@ -463,7 +467,9 @@ async function renderDashboard() {
         if (gotoDealbreakers) {
           gotoDealbreakers.addEventListener("click", (e) => {
             e.preventDefault();
-            navigateAndOpenCriteriaField("c-dealbreakers");
+            // No single field to jump to — hardFailed can now come from a
+            // dealbreaker, the work-arrangement multiselect, or minSalary.
+            navigateAndOpenCriteriaField(null);
           });
         }
         const gotoMinScore = document.getElementById("goto-min-score");
@@ -521,10 +527,10 @@ function discoveryZeroResultsHtml(diag) {
       <li>Job board sources checked (raw results before filtering) — ${sourceLines}</li>
       <li>Email digest: ${diag.emailDigestJobsFound} job listing(s) extracted from new emails</li>
       <li>${diag.newAfterDedup} of those weren't already-known jobs</li>
-      <li>${diag.hardFailed} ruled out by a <a href="#" id="goto-dealbreakers">dealbreaker in your criteria profile</a></li>
+      <li>${diag.hardFailed} ruled out by a <a href="#" id="goto-dealbreakers">hard requirement in your criteria profile</a> (a dealbreaker, work arrangement, or minimum salary)</li>
       <li>${diag.belowThreshold} scored below your <a href="#" id="goto-min-score">match threshold</a></li>
     </ul>
-    <p class="hint">If every source above shows 0, that usually means the request itself failed (network/API issue) rather than genuinely finding nothing — check the Railway logs for a matching <code>[sources]</code> or fetch-failed error line. Otherwise, click either link above to jump straight to where it's set and adjust it.</p>
+    <p class="hint">If every source above shows 0, that usually means the request itself failed (network/API issue) rather than genuinely finding nothing — check the Railway logs for a matching <code>[sources]</code> or fetch-failed error line. Otherwise, if <code>${diag.hardFailed}</code> looks high, your work-arrangement or minimum-salary requirement may be excluding more than intended — click either link above to jump straight to where it's set and broaden it.</p>
   `;
 }
 
@@ -695,15 +701,38 @@ async function renderReview() {
   main.innerHTML = `<h2>Review Queue</h2>${reviewSubTabsHtml("review")}<div id="review-body">Loading…</div>`;
   const jobs = await api("/jobs?status=discovered");
   const body = document.getElementById("review-body");
+  // Work arrangement and minimum salary are hard requirements (see
+  // server/scoring.js) — a job that misses either is excluded before it ever
+  // reaches this queue, not just scored down. That's invisible from here, so
+  // a suspiciously empty/thin queue gets a nudge to double-check those
+  // aren't narrower than intended, with a direct link back to fix it.
+  const broadenCriteriaHint = `Seeing fewer matches than you'd expect? Your <a href="#" id="goto-broaden-criteria">work arrangement or minimum salary requirement</a> might be excluding more than intended — those are hard requirements now, not just preferences.`;
   if (!jobs.length) {
-    body.innerHTML = emptyStateHtml("✅", "You're all caught up", "No new matches waiting for review right now — check back after your next discovery run.");
+    body.innerHTML = emptyStateHtml(
+      "✅",
+      "You're all caught up",
+      `No new matches waiting for review right now — check back after your next discovery run. ${broadenCriteriaHint}`
+    );
+    document.getElementById("goto-broaden-criteria").addEventListener("click", (e) => {
+      e.preventDefault();
+      navigateAndOpenCriteriaField(null);
+    });
     return;
   }
 
   const jobsById = Object.fromEntries(jobs.map((j) => [j.id, j]));
   const sources = [...new Set(jobs.map((j) => j.source).filter(Boolean))].sort();
 
+  // A handful of matches isn't necessarily wrong, but it's worth a nudge
+  // rather than leaving it looking like this is just all there is — see the
+  // comment above broadenCriteriaHint.
+  const fewResultsBannerHtml =
+    jobs.length < 5
+      ? `<p class="hint" style="margin:0 0 12px;">Only ${jobs.length} match${jobs.length === 1 ? "" : "es"} waiting for review. ${broadenCriteriaHint}</p>`
+      : "";
+
   body.innerHTML = `
+    ${fewResultsBannerHtml}
     <div class="filters" style="justify-content:space-between;">
       <div class="filters" style="margin:0;">
         <label style="margin:0;">Sort:</label>
@@ -738,6 +767,14 @@ async function renderReview() {
   // still awaiting review against your CURRENT profiles and shows exactly
   // which ones would no longer clear the bar, so you can decide — nothing
   // gets dismissed without you checking the list and confirming.
+  const gotoBroadenCriteria = document.getElementById("goto-broaden-criteria");
+  if (gotoBroadenCriteria) {
+    gotoBroadenCriteria.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigateAndOpenCriteriaField(null);
+    });
+  }
+
   document.getElementById("recheck-criteria").addEventListener("click", async (e) => {
     const btn = e.target;
     btn.disabled = true;
@@ -1994,7 +2031,7 @@ function openCriteriaEditor(c) {
           <label><input type="checkbox" id="c-arrangement-hybrid" ${arrangements.includes("hybrid") ? "checked" : ""} style="width:auto; display:inline;" /> Hybrid</label>
           <label><input type="checkbox" id="c-arrangement-office" ${arrangements.includes("office") ? "checked" : ""} style="width:auto; display:inline;" /> Office</label>
         </div>
-        <p class="hint">Uncheck "Remote" if you'd rule out fully-remote roles; uncheck both "Hybrid" and "Office" if you only want fully-remote. Job postings don't distinguish hybrid from office-based, so those two are always scored the same way — this is just about which you're each open to.</p>
+        <p class="hint">This is a hard requirement, not just a preference: jobs that don't match what's checked here are excluded entirely, not just scored lower. Uncheck "Remote" if you'd rule out fully-remote roles; uncheck both "Hybrid" and "Office" if you only want fully-remote. Job postings don't distinguish hybrid from office-based, so those two are always scored the same way.</p>
       </div>
     </div>
     <label>Remote locations (regions you can work remotely from/for, e.g. UK, EU, Worldwide)</label>
@@ -2010,7 +2047,7 @@ function openCriteriaEditor(c) {
     <input type="text" id="c-role-types" value="${esc(csv(c.roleTypes))}" />
     <label>Level of role (comma-separated, e.g. Senior, Staff, Lead)</label>
     <input type="text" id="c-seniority" value="${esc(csv(c.seniority))}" />
-    <label>Minimum salary (number, optional — only used as a soft signal since postings rarely list one cleanly)</label>
+    <label>Minimum salary (number, optional — hard requirement: a job is excluded entirely if its posted salary is below this, but only when a salary is actually stated, since most postings don't list one)</label>
     <input type="number" id="c-min-salary" value="${c.minSalary ?? ""}" />
     <label>Role priorities (comma-separated things you care about, e.g. async, 4-day week, fast-growing)</label>
     <input type="text" id="c-priorities" value="${esc(csv(c.rolePriorities))}" />
