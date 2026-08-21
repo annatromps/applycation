@@ -17,6 +17,17 @@ function defaultData() {
       aiModel: "", // blank = provider's sensible default (see server/ai/client.js's DEFAULT_MODELS)
       maxAiScoredPerCycle: 15, // cost guard: cap AI-assisted scoring calls per discovery run
       maxAiPostingSearchesPerCycle: 10, // cost guard: cap AI web-search posting lookups (server/aiPostingSearch.js) per startup backfill pass — only used when the free ATS-API lookup finds nothing and an Anthropic provider is configured; Anthropic bills web search separately from normal tokens
+      // Hard cap on total AI provider calls per day, across EVERY AI-assisted
+      // feature combined (scoring, cover-letter drafting, CV auto-fill,
+      // posting search, connection tests — anything that goes through
+      // server/ai/client.js's callAI/callGeminiWithSearch) — unlike the
+      // per-discovery-cycle guards above, which only bound one code path
+      // each and reset every run, this is a single running total for the
+      // day so it actually reflects a provider's daily free-tier quota.
+      // null = no limit (default: this app has no way to know your actual
+      // plan's quota, so it doesn't guess one). See server/ai/client.js's
+      // checkAndRecordAIUsage for the enforcement + reset logic.
+      aiDailyUsageLimit: null,
       autoGenerateMaterials: true, // build & save a tailored CV + cover letter for every surfaced match automatically
       maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)
       coverLetterInstructions: "", // free-text prompt fed to the AI-assisted cover letter drafter (server/docgen/coverLetter.js) — tone/emphasis preferences, e.g. "keep it under 200 words" or "lead with enthusiasm for the mission, not just the skills match". Only used when an AI provider is configured; template mode ignores it.
@@ -69,6 +80,12 @@ function defaultData() {
       // on-demand "Test connection" button next to it in Settings (see
       // routes/settings.js's /ai/test). null until tested at least once.
       aiProviderHealth: null,
+      // Running total of AI provider calls made "today" (UTC calendar date,
+      // not settings.timezone — see server/ai/client.js's checkAndRecordAIUsage
+      // for why), against settings.aiDailyUsageLimit. Rolls over to
+      // { date: <new date>, count: 0 } the first time a call is attempted
+      // on a new day; never reset by a timer, only lazily on next use.
+      aiUsage: { date: null, count: 0 },
     },
   };
 }

@@ -29,6 +29,62 @@ function isAIConfigured(settings) {
   return Boolean(settings && settings.aiProvider && settings.aiProvider !== "none" && settings.aiApiKey);
 }
 
+// ---------- Daily usage cap (settings.aiDailyUsageLimit) ----------
+// Every real outbound call to a provider — scoring, cover-letter drafting,
+// CV auto-fill, posting search, connection tests, anything that reaches
+// callAI() or callGeminiWithSearch() below — increments one running total
+// for the day and refuses to make the call at all once a configured limit
+// is hit, so a free-tier daily quota can't be blown through by the sum of
+// everything this app does, not just any one feature's own per-cycle cap
+// (maxAiScoredPerCycle etc., which only bound a single code path and reset
+// every discovery run). Deliberately checked+incremented via a fresh
+// db.read()/db.write() right here rather than threaded through every
+// caller's function signature — every AI-assisted feature already funnels
+// through these two functions, so this is the one place that's guaranteed
+// to see every call without touching a dozen other files.
+//
+// Uses the UTC calendar date as "today", not settings.timezone: no other
+// scheduling logic in this app is timezone-aware either (see
+// server/scheduler.js's own "local server time" comment), and getting the
+// exact reset instant right matters far less here than just having *a*
+// boundary that reliably resets once a day — being a few hours off from
+// whichever timezone your provider resets in doesn't change whether you
+// stay under quota. Requiring db.js here (rather than the reverse) is safe:
+// db.js/db-file.js/db-postgres.js never require this module back.
+const db = require("./../db");
+
+function todayUTC() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function checkAndRecordAIUsage(settings) {
+  const limit = settings && settings.aiDailyUsageLimit;
+  const data = await db.read();
+  const today = todayUTC();
+  if (!data.meta.aiUsage || data.meta.aiUsage.date !== today) {
+    data.meta.aiUsage = { date: today, count: 0 };
+  }
+  if (limit && data.meta.aiUsage.count >= limit) {
+    throw new Error(
+      `AI usage limit reached for today (${data.meta.aiUsage.count}/${limit} calls) — raise the limit in Settings, or wait for it to reset (midnight UTC).`
+    );
+  }
+  data.meta.aiUsage.count += 1;
+  await db.write(data);
+  return data.meta.aiUsage;
+}
+
+// Read-only view for the Settings page — doesn't touch the stored counter
+// (that only ever advances lazily, inside checkAndRecordAIUsage above), so
+// a day with zero calls so far correctly shows 0 instead of yesterday's
+// leftover count.
+function getAIUsageStatus(settings, meta) {
+  const today = todayUTC();
+  const stored = meta && meta.aiUsage;
+  const count = stored && stored.date === today ? stored.count : 0;
+  return { count, limit: (settings && settings.aiDailyUsageLimit) || null, date: today };
+}
+
 // Anthropic's hosted, server-executed web search tool — the request/response
 // round-trip (searching, reading results) all happens on Anthropic's side in
 // this one API call, so no separate search API key or client-side tool loop
@@ -159,7 +215,9 @@ async function callGemini({ apiKey, model, prompt, maxTokens }) {
 // kept separate from the model's own written text so callers can
 // cross-check a claimed URL against what was really found rather than
 // trusting the model's prose alone.
-async function callGeminiWithSearch({ apiKey, model, prompt, maxTokens }) {
+async function callGeminiWithSearch(settings, { model, prompt, maxTokens }) {
+  await checkAndRecordAIUsage(settings);
+  const apiKey = settings.aiApiKey;
   const res = await fetchWithTimeout(
     "https://generativelanguage.googleapis.com/v1beta/interactions",
     {
@@ -200,6 +258,7 @@ async function callAI(settings, { prompt, maxTokens = 600, allowWebSearch = fals
   if (!isAIConfigured(settings)) {
     throw new Error("No AI provider configured — set one under Advanced settings.");
   }
+  await checkAndRecordAIUsage(settings);
   const model = settings.aiModel || DEFAULT_MODELS[settings.aiProvider];
   const apiKey = settings.aiApiKey;
   switch (settings.aiProvider) {
@@ -248,6 +307,8 @@ module.exports = {
   isAnthropicSearchConfigured,
   isGeminiSearchConfigured,
   isPostingSearchConfigured,
+  getAIUsageStatus,
+  checkAndRecordAIUsage,
   DEFAULT_MODELS,
   PROVIDER_LABELS,
 };

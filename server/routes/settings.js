@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require("./../db");
 const scheduler = require("./../scheduler");
 const { testConnection, suggestSenderDomains } = require("./../email/inbox");
-const { testAIConnection } = require("./../ai/client");
+const { testAIConnection, getAIUsageStatus } = require("./../ai/client");
 
 router.get("/", async (req, res) => {
   const { settings, meta } = await db.read();
@@ -24,6 +24,11 @@ router.get("/", async (req, res) => {
     // backs on every discovery cycle for free; testing the AI provider
     // costs a real, tiny API call, so it only happens when asked).
     aiProviderHealth: meta ? meta.aiProviderHealth || null : null,
+    // How many AI calls have been made today (UTC) against the optional
+    // aiDailyUsageLimit cap above — see server/ai/client.js's
+    // getAIUsageStatus/checkAndRecordAIUsage. Always present, even with no
+    // limit set, so the Settings page can show "X calls today" either way.
+    aiUsageToday: getAIUsageStatus(settings, meta),
   };
   res.json(safe);
 });

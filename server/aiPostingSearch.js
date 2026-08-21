@@ -67,8 +67,7 @@ async function findViaAnthropic({ title, company }, settings) {
 
 async function findViaGemini({ title, company }, settings) {
   const model = settings.aiModel || "gemini-2.5-flash";
-  const { text, citationUrls } = await callGeminiWithSearch({
-    apiKey: settings.aiApiKey,
+  const { text, citationUrls } = await callGeminiWithSearch(settings, {
     model,
     prompt: buildPrompt(title, company),
     maxTokens: 1200,

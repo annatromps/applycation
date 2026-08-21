@@ -78,6 +78,23 @@ function aiHealthHtml(health) {
   return `<span class="health-dot health-error"></span><span class="hint">Failing as of ${fmtDate(health.checkedAt)} — ${esc(health.error || "unknown error")}</span>`;
 }
 
+// Live status line for settings.aiDailyUsageLimit — see
+// server/ai/client.js's getAIUsageStatus. `usage` is always present once
+// settings have loaded (even with no limit set), unlike aiProviderHealth
+// which is null until "Test connection" is clicked at least once.
+function aiUsageHtml(usage) {
+  if (!usage) return "";
+  const { count, limit } = usage;
+  if (!limit) {
+    return `<span class="health-dot health-unknown"></span><span class="hint">${count} AI call${count === 1 ? "" : "s"} made today (UTC) — no limit set.</span>`;
+  }
+  const atLimit = count >= limit;
+  const nearLimit = !atLimit && count / limit >= 0.8;
+  const cls = atLimit ? "health-error" : nearLimit ? "health-unknown" : "health-ok";
+  const suffix = atLimit ? " — limit reached, AI-assisted features are falling back to their non-AI version until this resets at midnight UTC." : "";
+  return `<span class="health-dot ${cls}"></span><span class="hint">${count} / ${limit} AI calls used today (UTC)${suffix}</span>`;
+}
+
 function scoreClass(score) {
   if (score >= 75) return "high";
   if (score >= 55) return "mid";
@@ -1497,6 +1514,11 @@ async function renderSettings() {
       <input type="number" id="maxAiPostingSearchesPerCycle" min="0" value="${settings.maxAiPostingSearchesPerCycle ?? 10}" />
       <p class="hint">When "Find posting" (automatic or the on-demand button) can't find a match on Greenhouse/Lever/Ashby/Recruitee, and your AI provider above is Anthropic or Gemini, it falls back to a real, grounded web search to find the actual posting instead of guessing — see "Automatic posting resolution" in the README. Both providers bill grounded search separately from normal usage, so this caps how many of those happen in one startup backfill pass over old jobs; the manual-add and per-job "Find posting" button aren't capped since they're one job at a time. Groq doesn't support this fallback.</p>
 
+      <label>Daily AI call limit, across everything combined (optional, cost guard)</label>
+      <input type="number" id="aiDailyUsageLimit" min="0" value="${settings.aiDailyUsageLimit ?? ""}" placeholder="no limit" />
+      <div id="ai-usage-today" style="margin:6px 0 4px;">${aiUsageHtml(settings.aiUsageToday)}</div>
+      <p class="hint">The two caps above only bound one thing each, per discovery run — this is a single running total for EVERY AI call this app makes in a day (scoring, cover-letter drafting, CV auto-fill, posting search, "Test connection" above), so it's what actually keeps you inside a provider's daily free-tier quota if you run discovery more than once a day or use the app throughout the day. Leave blank for no limit. Free-tier daily quotas vary by provider/model and change over time, so this app can't pre-fill your real number — check yours at <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener">ai.google.dev/gemini-api/docs/rate-limits</a> (Gemini) or the AI Studio dashboard, and set this a bit under it so a burst of activity doesn't tip you over. Once hit, everything just falls back to its non-AI version for the rest of the day (rule-based scoring, template cover letters, no posting web-search) rather than failing outright.</p>
+
       <label>Cover letter instructions for the AI</label>
       <textarea id="coverLetterInstructions" placeholder="e.g. keep it under 200 words; lead with enthusiasm for the mission before the skills match; slightly more formal tone for corporate/enterprise companies">${esc(settings.coverLetterInstructions || "")}</textarea>
       <p class="hint">Free text — tone, length, structure, whatever preferences you want the AI-assisted cover letter drafter (see "Optional: AI-assisted scoring &amp; cover letter drafting" above) to keep in mind for every letter it writes. Only used when an AI provider is configured above; template mode (no provider) ignores it. This is separate from the "Experience bank" on the <a href="#/me">Me</a> tab, which is source material, not instructions.</p>
@@ -1573,6 +1595,9 @@ async function renderSettings() {
       aiModel: document.getElementById("aiModel").value,
       maxAiScoredPerCycle: Number(document.getElementById("maxAiScoredPerCycle").value),
       maxAiPostingSearchesPerCycle: Number(document.getElementById("maxAiPostingSearchesPerCycle").value),
+      aiDailyUsageLimit: document.getElementById("aiDailyUsageLimit").value
+        ? Number(document.getElementById("aiDailyUsageLimit").value)
+        : null,
       coverLetterInstructions: document.getElementById("coverLetterInstructions").value,
       emailInbox: {
         enabled: document.getElementById("emailInboxEnabled").checked,
