@@ -84,9 +84,17 @@ function aiHealthHtml(health) {
 // which is null until "Test connection" is clicked at least once.
 function aiUsageHtml(usage) {
   if (!usage) return "";
-  const { count, limit } = usage;
+  const { count, limit, quotaExceededAt, quotaExceededProvider } = usage;
+  // Auto-detected takes priority over the manual limit display: this means
+  // the provider ITSELF said "no more today" (a real 429), which is more
+  // authoritative than whatever number happens to be typed into the field
+  // below — see server/ai/client.js's recordQuotaExceeded/isQuotaError.
+  if (quotaExceededAt) {
+    const timeStr = new Date(quotaExceededAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    return `<span class="health-dot health-error"></span><span class="hint">${esc(quotaExceededProvider || "Your AI provider")} reported its free-tier quota exhausted today at ${timeStr} — AI-assisted features are automatically falling back to their non-AI version until this resets at midnight UTC. No action needed; this clears itself.</span>`;
+  }
   if (!limit) {
-    return `<span class="health-dot health-unknown"></span><span class="hint">${count} AI call${count === 1 ? "" : "s"} made today (UTC) — no limit set.</span>`;
+    return `<span class="health-dot health-unknown"></span><span class="hint">${count} AI call${count === 1 ? "" : "s"} made today (UTC) — no manual limit set. This app watches for your provider's own "quota exceeded" response and auto-pauses AI features for the rest of the day if it sees one, so you don't need to know or set a number for that protection to work.</span>`;
   }
   const atLimit = count >= limit;
   const nearLimit = !atLimit && count / limit >= 0.8;
@@ -1514,10 +1522,12 @@ async function renderSettings() {
       <input type="number" id="maxAiPostingSearchesPerCycle" min="0" value="${settings.maxAiPostingSearchesPerCycle ?? 10}" />
       <p class="hint">When "Find posting" (automatic or the on-demand button) can't find a match on Greenhouse/Lever/Ashby/Recruitee, and your AI provider above is Anthropic or Gemini, it falls back to a real, grounded web search to find the actual posting instead of guessing — see "Automatic posting resolution" in the README. Both providers bill grounded search separately from normal usage, so this caps how many of those happen in one startup backfill pass over old jobs; the manual-add and per-job "Find posting" button aren't capped since they're one job at a time. Groq doesn't support this fallback.</p>
 
-      <label>Daily AI call limit, across everything combined (optional, cost guard)</label>
-      <input type="number" id="aiDailyUsageLimit" min="0" value="${settings.aiDailyUsageLimit ?? ""}" placeholder="no limit" />
-      <div id="ai-usage-today" style="margin:6px 0 4px;">${aiUsageHtml(settings.aiUsageToday)}</div>
-      <p class="hint">The two caps above only bound one thing each, per discovery run — this is a single running total for EVERY AI call this app makes in a day (scoring, cover-letter drafting, CV auto-fill, posting search, "Test connection" above), so it's what actually keeps you inside a provider's daily free-tier quota if you run discovery more than once a day or use the app throughout the day. Leave blank for no limit. Free-tier daily quotas vary by provider/model and change over time, so this app can't pre-fill your real number — check yours at <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener">ai.google.dev/gemini-api/docs/rate-limits</a> (Gemini) or the AI Studio dashboard, and set this a bit under it so a burst of activity doesn't tip you over. Once hit, everything just falls back to its non-AI version for the rest of the day (rule-based scoring, template cover letters, no posting web-search) rather than failing outright.</p>
+      <label>Today's AI usage</label>
+      <div id="ai-usage-today" style="margin:2px 0 10px;">${aiUsageHtml(settings.aiUsageToday)}</div>
+
+      <label>Daily AI call limit, across everything combined (optional — you don't need to set this)</label>
+      <input type="number" id="aiDailyUsageLimit" min="0" value="${settings.aiDailyUsageLimit ?? ""}" placeholder="no limit — auto-detected instead" />
+      <p class="hint">This app automatically watches for your provider's own "quota exceeded" response and pauses every AI-assisted feature for the rest of the day the moment it sees one — no number to look up or guess, and it's a single running total across EVERY AI call this app makes (scoring, cover-letter drafting, CV auto-fill, posting search, "Test connection" above), not just one feature's per-run cap like the two settings above. The one gap: since it reacts to the provider's own answer, the very first call after quota is actually exhausted still gets made (and fails) before the pause kicks in. If you'd rather stop just <em>before</em> that happens, you can optionally set a number here yourself — check your real quota at <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener">ai.google.dev/gemini-api/docs/rate-limits</a> (Gemini) or the AI Studio dashboard and set this a bit under it. Leave blank to just rely on the automatic detection above.</p>
 
       <label>Cover letter instructions for the AI</label>
       <textarea id="coverLetterInstructions" placeholder="e.g. keep it under 200 words; lead with enthusiasm for the mission before the skills match; slightly more formal tone for corporate/enterprise companies">${esc(settings.coverLetterInstructions || "")}</textarea>

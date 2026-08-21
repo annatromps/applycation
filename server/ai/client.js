@@ -64,6 +64,17 @@ async function checkAndRecordAIUsage(settings) {
   if (!data.meta.aiUsage || data.meta.aiUsage.date !== today) {
     data.meta.aiUsage = { date: today, count: 0 };
   }
+  // The provider itself already told us today's quota is used up (see
+  // recordQuotaExceeded below) — don't even attempt the call, so this is a
+  // free, instant "no" rather than another wasted request against an
+  // already-exhausted quota. This is what actually answers "how do I know
+  // my real limit without looking it up" — the provider's own 429 IS the
+  // real limit, discovered live, no manual number needed at all.
+  if (data.meta.aiUsage.quotaExceededAt) {
+    throw new Error(
+      `${data.meta.aiUsage.quotaExceededProvider || settings.aiProvider} reported its free-tier quota exhausted today at ${data.meta.aiUsage.quotaExceededAt} — AI-assisted features are paused until this resets tomorrow (UTC).${data.meta.aiUsage.quotaExceededDetail ? ` (${data.meta.aiUsage.quotaExceededDetail})` : ""}`
+    );
+  }
   if (limit && data.meta.aiUsage.count >= limit) {
     throw new Error(
       `AI usage limit reached for today (${data.meta.aiUsage.count}/${limit} calls) — raise the limit in Settings, or wait for it to reset (midnight UTC).`
@@ -74,15 +85,78 @@ async function checkAndRecordAIUsage(settings) {
   return data.meta.aiUsage;
 }
 
+// Called when a provider call comes back with a genuine quota/rate-limit
+// error (see isQuotaError below) — records it so checkAndRecordAIUsage
+// short-circuits every subsequent call today, no manual number required.
+// This is the real answer to "how do I find my limit without looking it
+// up": rather than guessing a number in advance, the app just reacts the
+// first time the provider itself says "no more today", and self-pauses.
+// The trade-off is that the FIRST call after quota is actually exhausted
+// still gets made (and fails) before this kicks in — there's no way around
+// that without the provider exposing remaining-quota up front, which
+// Gemini's plain API doesn't for free-tier keys (see the note on
+// aiDailyUsageLimit in defaultData.js for the manual, preventive
+// alternative: a number set a bit under your real quota stops calls
+// *before* that first failure, if you want to look it up once).
+async function recordQuotaExceeded(settings, detail) {
+  const data = await db.read();
+  const today = todayUTC();
+  if (!data.meta.aiUsage || data.meta.aiUsage.date !== today) {
+    data.meta.aiUsage = { date: today, count: 0 };
+  }
+  data.meta.aiUsage.quotaExceededAt = new Date().toISOString();
+  data.meta.aiUsage.quotaExceededProvider = settings.aiProvider;
+  data.meta.aiUsage.quotaExceededDetail = String(detail || "").slice(0, 300);
+  await db.write(data);
+}
+
+// Best-effort detection of "this failure was the provider's quota/rate
+// limit, not some other error" — a plain HTTP 429 is the standard signal
+// across all three providers here, backed up by a text match on the
+// response body for the cases (seen in some of Google's APIs) where a
+// quota rejection comes back with a different status code. Not verified
+// against a live 429 from any of these providers (this sandbox has no
+// outbound access to test it) — if usage tracking doesn't seem to be
+// catching a real quota error, check the Railway logs for the actual
+// status/body of the failing call and adjust this.
+function isQuotaError(status, bodyText) {
+  if (status === 429) return true;
+  return typeof bodyText === "string" && /RESOURCE_EXHAUSTED|quota exceeded|rate.?limit exceeded/i.test(bodyText);
+}
+
+// Thin wrapper every actual provider call goes through: runs it, and if it
+// fails with the quota/rate-limit signal (err.isQuotaError, set by
+// throwForBadResponse above), records that centrally before rethrowing so
+// checkAndRecordAIUsage can short-circuit every later call today. The
+// original error still propagates unchanged either way — this only adds a
+// side effect on the quota-specific case, callers see the same thrown
+// error/message as before.
+async function runProviderCall(settings, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e.isQuotaError) {
+      await recordQuotaExceeded(settings, e.message);
+    }
+    throw e;
+  }
+}
+
 // Read-only view for the Settings page — doesn't touch the stored counter
 // (that only ever advances lazily, inside checkAndRecordAIUsage above), so
 // a day with zero calls so far correctly shows 0 instead of yesterday's
 // leftover count.
 function getAIUsageStatus(settings, meta) {
   const today = todayUTC();
-  const stored = meta && meta.aiUsage;
-  const count = stored && stored.date === today ? stored.count : 0;
-  return { count, limit: (settings && settings.aiDailyUsageLimit) || null, date: today };
+  const stored = meta && meta.aiUsage && meta.aiUsage.date === today ? meta.aiUsage : null;
+  return {
+    count: stored ? stored.count : 0,
+    limit: (settings && settings.aiDailyUsageLimit) || null,
+    date: today,
+    quotaExceededAt: stored ? stored.quotaExceededAt || null : null,
+    quotaExceededProvider: stored ? stored.quotaExceededProvider || null : null,
+    quotaExceededDetail: stored ? stored.quotaExceededDetail || null : null,
+  };
 }
 
 // Anthropic's hosted, server-executed web search tool — the request/response
@@ -149,6 +223,18 @@ async function fetchWithTimeout(url, opts, providerLabel) {
   }
 }
 
+// Throws with `.isQuotaError` set when the failure looks like the
+// provider's own rate/quota limit (see isQuotaError above) — callAI/
+// callGeminiWithSearch check this flag to auto-pause further calls today
+// without needing any manually-entered limit. Every provider call function
+// below follows this same shape.
+async function throwForBadResponse(res, providerLabel, snippetLen = 300) {
+  const bodyText = (await res.text()).slice(0, snippetLen);
+  const err = new Error(`${providerLabel} API request failed (${res.status}): ${bodyText}`);
+  err.isQuotaError = isQuotaError(res.status, bodyText);
+  throw err;
+}
+
 async function callAnthropic({ apiKey, model, prompt, maxTokens, tools }) {
   const body = { model, max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] };
   if (tools && tools.length) body.tools = tools;
@@ -161,7 +247,7 @@ async function callAnthropic({ apiKey, model, prompt, maxTokens, tools }) {
     },
     "Anthropic"
   );
-  if (!res.ok) throw new Error(`Anthropic API request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) await throwForBadResponse(res, "Anthropic");
   const data = await res.json();
   // Non-text content blocks (server_tool_use, web_search_tool_result) have
   // no .text field, so they naturally drop out of this join — only the
@@ -180,7 +266,7 @@ async function callGroq({ apiKey, model, prompt, maxTokens }) {
     },
     "Groq"
   );
-  if (!res.ok) throw new Error(`Groq API request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) await throwForBadResponse(res, "Groq");
   const data = await res.json();
   return ((data.choices || [])[0]?.message?.content || "").trim();
 }
@@ -195,7 +281,7 @@ async function callGemini({ apiKey, model, prompt, maxTokens }) {
     },
     "Gemini"
   );
-  if (!res.ok) throw new Error(`Gemini API request failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) await throwForBadResponse(res, "Gemini");
   const data = await res.json();
   const parts = (data.candidates || [])[0]?.content?.parts || [];
   return parts.map((p) => p.text || "").join("\n").trim();
@@ -217,35 +303,37 @@ async function callGemini({ apiKey, model, prompt, maxTokens }) {
 // trusting the model's prose alone.
 async function callGeminiWithSearch(settings, { model, prompt, maxTokens }) {
   await checkAndRecordAIUsage(settings);
-  const apiKey = settings.aiApiKey;
-  const res = await fetchWithTimeout(
-    "https://generativelanguage.googleapis.com/v1beta/interactions",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        tools: [{ type: "google_search" }],
-        generation_config: { max_output_tokens: maxTokens },
-      }),
-    },
-    "Gemini"
-  );
-  if (!res.ok) throw new Error(`Gemini Interactions API request failed (${res.status}): ${(await res.text()).slice(0, 500)}`);
-  const data = await res.json();
-  const steps = data.steps || [];
-  let text = "";
-  const citationUrls = [];
-  for (const step of steps) {
-    for (const block of step.content || []) {
-      if (block.type === "text" && block.text) text += block.text + "\n";
-      for (const ann of block.annotations || []) {
-        if (ann.type === "url_citation" && ann.url) citationUrls.push(ann.url);
+  return runProviderCall(settings, async () => {
+    const apiKey = settings.aiApiKey;
+    const res = await fetchWithTimeout(
+      "https://generativelanguage.googleapis.com/v1beta/interactions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          model,
+          input: prompt,
+          tools: [{ type: "google_search" }],
+          generation_config: { max_output_tokens: maxTokens },
+        }),
+      },
+      "Gemini"
+    );
+    if (!res.ok) await throwForBadResponse(res, "Gemini Interactions API", 500);
+    const data = await res.json();
+    const steps = data.steps || [];
+    let text = "";
+    const citationUrls = [];
+    for (const step of steps) {
+      for (const block of step.content || []) {
+        if (block.type === "text" && block.text) text += block.text + "\n";
+        for (const ann of block.annotations || []) {
+          if (ann.type === "url_citation" && ann.url) citationUrls.push(ann.url);
+        }
       }
     }
-  }
-  return { text: text.trim(), citationUrls };
+    return { text: text.trim(), citationUrls };
+  });
 }
 
 /**
@@ -261,23 +349,25 @@ async function callAI(settings, { prompt, maxTokens = 600, allowWebSearch = fals
   await checkAndRecordAIUsage(settings);
   const model = settings.aiModel || DEFAULT_MODELS[settings.aiProvider];
   const apiKey = settings.aiApiKey;
-  switch (settings.aiProvider) {
-    case "anthropic": {
-      // allowWebSearch is silently a no-op for the other providers below —
-      // callers that actually need grounded search results should check
-      // isPostingSearchConfigured() first rather than relying on this flag
-      // alone (and for Gemini, call callGeminiWithSearch() directly instead
-      // of callAI() — different endpoint/response shape, see above).
-      const tools = allowWebSearch ? [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }] : undefined;
-      return callAnthropic({ apiKey, model, prompt, maxTokens, tools });
+  return runProviderCall(settings, () => {
+    switch (settings.aiProvider) {
+      case "anthropic": {
+        // allowWebSearch is silently a no-op for the other providers below —
+        // callers that actually need grounded search results should check
+        // isPostingSearchConfigured() first rather than relying on this flag
+        // alone (and for Gemini, call callGeminiWithSearch() directly instead
+        // of callAI() — different endpoint/response shape, see above).
+        const tools = allowWebSearch ? [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }] : undefined;
+        return callAnthropic({ apiKey, model, prompt, maxTokens, tools });
+      }
+      case "groq":
+        return callGroq({ apiKey, model, prompt, maxTokens });
+      case "gemini":
+        return callGemini({ apiKey, model, prompt, maxTokens });
+      default:
+        throw new Error(`Unknown AI provider: ${settings.aiProvider}`);
     }
-    case "groq":
-      return callGroq({ apiKey, model, prompt, maxTokens });
-    case "gemini":
-      return callGemini({ apiKey, model, prompt, maxTokens });
-    default:
-      throw new Error(`Unknown AI provider: ${settings.aiProvider}`);
-  }
+  });
 }
 
 // On-demand connectivity check for the Settings health indicator — same
@@ -309,6 +399,7 @@ module.exports = {
   isPostingSearchConfigured,
   getAIUsageStatus,
   checkAndRecordAIUsage,
+  recordQuotaExceeded,
   DEFAULT_MODELS,
   PROVIDER_LABELS,
 };
