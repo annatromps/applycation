@@ -841,13 +841,38 @@ async function renderReview() {
     const close = () => closeModal();
     document.getElementById("close-modal").addEventListener("click", close);
     document.getElementById("close-modal-2").addEventListener("click", close);
-    document.getElementById("confirm-dismiss-recheck").addEventListener("click", async () => {
+    document.getElementById("confirm-dismiss-recheck").addEventListener("click", async (e) => {
+      const dismissBtn = e.target;
       const checked = [...document.querySelectorAll("[data-recheck-job]:checked")].map((el) => el.dataset.recheckJob);
-      for (const id of checked) {
-        await api(`/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "dismissed" }) });
+      dismissBtn.disabled = true;
+      document.getElementById("close-modal-2").disabled = true;
+      dismissBtn.textContent = `Dismissing ${checked.length}…`;
+      // One bulk request instead of one per job — this list is routinely a
+      // few hundred jobs now that work-arrangement/minSalary are hard
+      // requirements (see server/scoring.js), and the whole app's state is
+      // one JSONB blob per row (db-postgres.js), so N individual /status
+      // calls meant N full read+write round trips of the ENTIRE dataset —
+      // slow enough at this size to look like the button just wasn't doing
+      // anything. See server/routes/jobs.js's /bulk-status.
+      try {
+        const { updated, notFound } = await api("/jobs/bulk-status", {
+          method: "POST",
+          body: JSON.stringify({ ids: checked, status: "dismissed" }),
+        });
+        closeModal();
+        renderReview();
+        if (notFound && notFound.length) {
+          showMessageModal(
+            "Some jobs couldn't be found",
+            `<p>${updated.length} of ${checked.length} dismissed successfully. ${notFound.length} no longer existed (already removed some other way) — nothing else was affected.</p>`
+          );
+        }
+      } catch (err) {
+        dismissBtn.disabled = false;
+        document.getElementById("close-modal-2").disabled = false;
+        dismissBtn.textContent = "Dismiss the checked ones";
+        showMessageModal("Couldn't dismiss those jobs", `<p>${esc(err.message)}</p>`);
       }
-      closeModal();
-      renderReview();
     });
   });
 

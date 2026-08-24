@@ -276,15 +276,11 @@ router.post("/discover", async (req, res) => {
   }
 });
 
-router.post("/:id/status", async (req, res) => {
-  const { status, note, outcome } = req.body || {};
-  if (status && !VALID_STATUSES.includes(status)) {
-    return res.status(400).json({ error: `invalid status, must be one of: ${VALID_STATUSES.join(", ")}` });
-  }
-  const data = await db.read();
-  const job = data.jobs.find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "not found" });
-
+// Shared by the single-job route below and the bulk one further down, so
+// the two never drift apart on what a status change actually does
+// (statusHistory, appliedAt, outcome bookkeeping). Mutates `job` in place;
+// callers are responsible for their own db.read()/db.write() around it.
+function applyStatusChange(job, { status, note, outcome }) {
   const now = new Date().toISOString();
   const APPLIED_OR_LATER = ["submitted", "interviewing", "offer", "rejected", "withdrawn"];
   if (status) {
@@ -300,9 +296,55 @@ router.post("/:id/status", async (req, res) => {
     }
   }
   if (note && !status) job.notes = note;
+}
+
+router.post("/:id/status", async (req, res) => {
+  const { status, note, outcome } = req.body || {};
+  if (status && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `invalid status, must be one of: ${VALID_STATUSES.join(", ")}` });
+  }
+  const data = await db.read();
+  const job = data.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "not found" });
+
+  applyStatusChange(job, { status, note, outcome });
   await db.write(data);
   const { materials, ...rest } = job;
   res.json({ ...rest, materials: publicMaterials(materials) });
+});
+
+// Bulk version of the above — for the Review Queue's "re-check against
+// current criteria" flow, which can turn up hundreds of jobs to dismiss at
+// once now that work-arrangement/minSalary are hard requirements (see
+// server/scoring.js). The whole app's state is one JSONB blob per row (see
+// db-postgres.js's header comment), so N individual /:id/status calls means
+// N full read+write round trips of the ENTIRE dataset — including every
+// generated CV/cover-letter's base64 bytes — which is genuinely slow enough
+// at a few hundred jobs to look like the button just isn't working. This
+// does exactly one read and one write for the whole batch instead.
+router.post("/bulk-status", async (req, res) => {
+  const { ids, status, note, outcome } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length) {
+    return res.status(400).json({ error: "ids must be a non-empty array" });
+  }
+  if (status && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `invalid status, must be one of: ${VALID_STATUSES.join(", ")}` });
+  }
+  const data = await db.read();
+  const idSet = new Set(ids);
+  const updated = [];
+  const notFound = [];
+  for (const id of idSet) {
+    const job = data.jobs.find((j) => j.id === id);
+    if (!job) {
+      notFound.push(id);
+      continue;
+    }
+    applyStatusChange(job, { status, note, outcome });
+    updated.push(id);
+  }
+  await db.write(data);
+  res.json({ updated, notFound });
 });
 
 // Thumbs up/down + optional note on a suggested job. Stored per-job and fed

@@ -319,7 +319,7 @@ async function callGeminiWithSearch(settings, { model, prompt, maxTokens }) {
       },
       "Gemini"
     );
-    if (!res.ok) await throwForBadResponse(res, "Gemini Interactions API", 500);
+    if (!res.ok) await throwForBadResponse(res, "Gemini Interactions", 500);
     const data = await res.json();
     const steps = data.steps || [];
     let text = "";
