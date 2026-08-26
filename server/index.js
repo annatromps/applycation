@@ -1,4 +1,16 @@
 const express = require("express");
+// Patches Express 4's router so a rejected promise inside an `async (req,
+// res) => {...}` route handler is forwarded to the error-handling
+// middleware below, instead of becoming an unhandled promise rejection
+// that crashes the whole process. Express 4 does not do this on its own
+// (Express 5 does) — without this shim, EVERY route across every file in
+// server/routes/ that does `await db.read()`/`db.write()` with no try/catch
+// of its own (which is nearly all of them) takes the whole server down the
+// moment the database is unreachable, one request at a time, in a repeating
+// crash-restart loop that looks identical to the app just being broken.
+// This must be required before the route files below, since it works by
+// patching express.Router.
+require("express-async-errors");
 const cors = require("cors");
 const path = require("path");
 const db = require("./db");
@@ -17,6 +29,21 @@ app.use("/api/jobs", require("./routes/jobs"));
 app.use("/api/stats", require("./routes/stats"));
 
 app.use(express.static(path.join(__dirname, "..", "public")));
+
+// Catches whatever express-async-errors forwards here (see the require at
+// the top of this file) — turns a failed request into a clean JSON 500
+// instead of Express's default HTML error page, and, critically, instead
+// of an unhandled rejection that would otherwise crash the process. Must
+// be registered after all the route mounts above (Express only sends
+// errors to a 4-arg middleware that comes after the routes that can throw
+// them). Logged with the route path so a burst of these in the Railway
+// logs is easy to tell apart from a genuine code bug once the database is
+// reachable again.
+app.use((err, req, res, next) => {
+  console.error(`[${req.method} ${req.path}] request failed:`, err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err.message || "Something went wrong handling that request." });
+});
 
 const PORT = process.env.PORT || 3000;
 
