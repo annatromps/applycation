@@ -107,17 +107,45 @@ async function backfillMissingScores() {
   }
 }
 
-(async () => {
-  // Ensure the store is initialized (creates the local file, or the Postgres
-  // table + row, depending on which backend is active) before serving traffic.
-  await db.read();
-  app.listen(PORT, () => {
-    console.log(`Applycation running at http://localhost:${PORT}`);
-    console.log(`Storage backend: ${process.env.DATABASE_URL ? "Postgres" : "local file (data/db.json)"}`);
-    scheduler.reschedule();
-    backfillMissingScores().catch((e) => console.error("[backfill] failed:", e.message));
-  });
-})().catch((e) => {
-  console.error("Failed to start:", e);
-  process.exit(1);
+// Start listening FIRST, unconditionally, then initialize the store as a
+// background step — never the other way around. This used to `await
+// db.read()` before calling app.listen() at all, which meant any database
+// problem (unreachable Postgres, a full disk volume, a transient network
+// blip) took the ENTIRE app offline, including the static frontend files
+// below, which don't touch the database and have no reason to depend on
+// it being reachable. A user hitting the site during a database outage
+// should at least see the app shell (and a clear per-request error from
+// whichever API call actually needs the database), not nothing at all —
+// the same "a slow AI/network hiccup should never look like the app being
+// down" principle backfillMissingScores below already follows, just
+// applied one step earlier, to the store-initialization step itself.
+app.listen(PORT, () => {
+  console.log(`Applycation running at http://localhost:${PORT}`);
+  console.log(`Storage backend: ${process.env.DATABASE_URL ? "Postgres" : "local file (data/db.json)"}`);
+  // scheduler.reschedule() is async and reads the database internally — it
+  // was previously called bare, with no .catch(). An async function's
+  // rejection with nothing attached to handle it is an unhandled promise
+  // rejection, which crashes the whole Node process by default (Node 15+).
+  // That means a database problem didn't just leave the scheduler
+  // unconfigured, it took the entire freshly-started server back down
+  // moments after "Applycation running at ..." printed — the app briefly
+  // coming up and then dying, which from the outside looks identical to it
+  // never starting at all, and explains a restart-loop under a sustained
+  // database outage (Railway would keep relaunching the container, each
+  // attempt crashing here the same way).
+  // If this fails, the cron schedule just doesn't get set up this time —
+  // it'll be attempted again on the next restart, or immediately the next
+  // time settings are saved (routes/settings.js's PUT / also calls
+  // scheduler.reschedule()). Not catastrophic on its own; manual discovery
+  // runs are unaffected either way.
+  scheduler.reschedule().catch((e) => console.error("[startup] Scheduler setup failed, will retry on next restart or settings save:", e.message));
+  // Ensures the store is initialized (creates the local file, or the
+  // Postgres table + row) — still needed before most API routes will work,
+  // but a failure here now only means "the database isn't ready yet",
+  // logged clearly, rather than "the whole process refuses to start".
+  // db.read() is called again by every route that needs it regardless, so
+  // this first call is purely a warm/log-early step, not a hard dependency.
+  db.read()
+    .then(() => backfillMissingScores())
+    .catch((e) => console.error("[startup] Database not reachable yet — API requests will fail until it is:", e.message));
 });

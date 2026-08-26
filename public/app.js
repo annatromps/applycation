@@ -1525,6 +1525,10 @@ async function renderSettings() {
       <input type="number" id="maxMaterialsGeneratedPerCycle" min="0" value="${settings.maxMaterialsGeneratedPerCycle ?? 20}" />
       <p class="hint">If AI-assisted cover-letter drafting is on (see below), each generation is an API call — this caps spend per run. Anything skipped by the cap can still be generated manually from the job's detail view.</p>
 
+      <label>Storage cleanup</label>
+      <p class="hint">Every job you dismiss, get rejected from, or withdraw from now automatically drops its generated CV/cover letter .docx files — they're by far the biggest thing stored per job, and there's rarely a reason to keep them once you're not pursuing that role (one click regenerates them if you ever change your mind). This button does the same cleanup retroactively, for anything dismissed/rejected/withdrawn before that started happening automatically.</p>
+      <div><button type="button" id="cleanup-materials" class="secondary">🧹 Clean up old materials now</button> <span id="cleanup-materials-msg" class="hint"></span></div>
+
       <div class="section-title">Optional: AI-assisted scoring, drafting &amp; posting lookup</div>
       <p class="hint">Powers the "AI preferences" free-text box on each criteria profile, more natural cover-letter drafting, CV auto-fill, the CV tailoring summary, email-digest job extraction, and — for Anthropic or Gemini specifically — a real web search to find a job's actual posting page when the free ATS lookup can't (see "Automatic posting resolution" in the README). This is a completely separate thing from this chat: your app runs on Railway with no connection to any Claude conversation, so it needs its own API key here to make its own calls — pasting a key below doesn't use up or relate to anything in this chat, and vice versa. Leave provider as "None" to use plain rule-based scoring and template drafting instead — everything except the web-search posting lookup still works fully without this. One provider is all you need for everything on this page, including the posting lookup — Gemini's plain free tier plus billing enabled for search (still effectively free at this app's volume) covers the same ground Anthropic's paid key does; Groq doesn't support the web-search posting lookup at all.</p>
       <label>AI provider</label>
@@ -1716,6 +1720,24 @@ async function renderSettings() {
     }
     btn.disabled = false;
     btn.textContent = "Test connection";
+  });
+
+  document.getElementById("cleanup-materials").addEventListener("click", async () => {
+    const btn = document.getElementById("cleanup-materials");
+    const msg = document.getElementById("cleanup-materials-msg");
+    btn.disabled = true;
+    btn.textContent = "Cleaning up…";
+    try {
+      const result = await api("/jobs/cleanup-materials", { method: "POST" });
+      const kb = Math.round(result.approxBytesFreed / 1024);
+      msg.textContent = result.cleaned
+        ? `Cleared materials from ${result.cleaned} job(s), freeing roughly ${kb.toLocaleString()} KB.`
+        : "Nothing to clean up — no dismissed/rejected/withdrawn jobs still had materials stored.";
+    } catch (err) {
+      msg.textContent = `Couldn't clean up: ${err.message}`;
+    }
+    btn.disabled = false;
+    btn.textContent = "🧹 Clean up old materials now";
   });
 
   // Scans recent inbox mail for sender domains that look like job alerts

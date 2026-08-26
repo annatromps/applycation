@@ -280,6 +280,20 @@ router.post("/discover", async (req, res) => {
 // the two never drift apart on what a status change actually does
 // (statusHistory, appliedAt, outcome bookkeeping). Mutates `job` in place;
 // callers are responsible for their own db.read()/db.write() around it.
+// Statuses that mean "not proceeding with this one" — a dismissal, or an
+// application that ended without an offer. Once a job lands here there's
+// essentially never a reason to still be holding onto its generated CV/
+// cover letter .docx bytes (see PRUNE_MATERIALS_ON_STATUS below): they're
+// the single biggest thing this app stores per job (a tailored CV +
+// cover letter, base64-encoded, auto-generated for every match by
+// default), and unlike the job record itself — which stays, so history/
+// stats/Archive keep working — there's no ongoing use for the documents
+// once you've decided against a role. Regenerating them later if you ever
+// change your mind is one click away on the job's own page. "offer" is
+// deliberately excluded — that one's a genuine reason you might still
+// want the exact materials you used.
+const PRUNE_MATERIALS_ON_STATUS = ["dismissed", "rejected", "withdrawn"];
+
 function applyStatusChange(job, { status, note, outcome }) {
   const now = new Date().toISOString();
   const APPLIED_OR_LATER = ["submitted", "interviewing", "offer", "rejected", "withdrawn"];
@@ -293,6 +307,9 @@ function applyStatusChange(job, { status, note, outcome }) {
     if (["offer", "rejected", "withdrawn"].includes(status)) {
       job.outcomeAt = now;
       job.outcome = outcome || status;
+    }
+    if (PRUNE_MATERIALS_ON_STATUS.includes(status) && job.materials) {
+      job.materials = null;
     }
   }
   if (note && !status) job.notes = note;
@@ -345,6 +362,28 @@ router.post("/bulk-status", async (req, res) => {
   }
   await db.write(data);
   res.json({ updated, notFound });
+});
+
+// Retroactive version of the auto-prune in applyStatusChange above — for
+// jobs that were already dismissed/rejected/withdrawn BEFORE that pruning
+// existed, and so are still sitting on their full generated CV + cover
+// letter .docx bytes. One-off cleanup, safe to run any time (it only ever
+// touches jobs already in a "not proceeding" status, and only their
+// materials field, nothing else) — surfaced as a button in Settings
+// rather than run automatically on a schedule, since it's a one-time catch
+// -up rather than an ongoing need once the auto-prune above is live.
+router.post("/cleanup-materials", async (req, res) => {
+  const data = await db.read();
+  let cleaned = 0;
+  let bytesFreed = 0;
+  for (const job of data.jobs) {
+    if (!PRUNE_MATERIALS_ON_STATUS.includes(job.status) || !job.materials) continue;
+    bytesFreed += (job.materials.cvBase64 || "").length + (job.materials.coverLetterBase64 || "").length;
+    job.materials = null;
+    cleaned++;
+  }
+  if (cleaned) await db.write(data);
+  res.json({ cleaned, approxBytesFreed: bytesFreed });
 });
 
 // Thumbs up/down + optional note on a suggested job. Stored per-job and fed
