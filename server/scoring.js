@@ -406,20 +406,57 @@ async function scoreSubmissionEaseFull(job, settings) {
   return result;
 }
 
+// Turns the structured candidate profile (see server/docgen/importProfile.js
+// for the exact shape) into a compact text block for the AI scoring prompt
+// below — headline/summary plus each past role's company, title and
+// bullets. This is what lets the AI notice a genuine sector/domain overlap
+// between the candidate's OWN history and a job/company that never
+// literally appears in their criteria.sectorsInclude keyword list (e.g.
+// "you worked at a healthtech company before, and this posting is also
+// health-adjacent") — a real, evidenced connection the rule-based scorer in
+// scoreJob() above can never make, since it only ever matches literal text
+// against a keyword list, not what the candidate has actually done. Capped
+// to the 8 most recent roles and a modest bullet length so the prompt stays
+// a reasonable size as a CV's experience section grows.
+function summarizeCandidateBackground(candidateProfile) {
+  if (!candidateProfile) return "";
+  const lines = [];
+  if (candidateProfile.headline) lines.push(`Current headline: ${candidateProfile.headline}`);
+  if (candidateProfile.summary) lines.push(`Summary: ${candidateProfile.summary}`);
+  const experience = (candidateProfile.experience || []).slice(0, 8);
+  for (const role of experience) {
+    const header = [role.title, role.company].filter(Boolean).join(" at ");
+    if (!header) continue;
+    const bits = [header];
+    if (role.subtitle) bits.push(`(${role.subtitle})`);
+    if (role.dates) bits.push(`— ${role.dates}`);
+    lines.push(bits.join(" "));
+    for (const b of (role.bullets || []).slice(0, 4)) lines.push(`  - ${b}`);
+  }
+  return lines.join("\n");
+}
+
 /**
  * AI-assisted scoring pass. Sends the job + your structured criteria + your
- * free-text "AI preferences" to Claude and asks for two qualitative 0-100
- * ratings — how well you match what the job requires, and how good the job
- * looks for you (comp, perks, holiday, culture, growth) — with reasons for
- * each. Lets you express nuance ("avoid heavily bureaucratic companies",
- * "prefer teams that ship fast", "I need at least 30 days holiday") that
- * keyword rules can't capture, especially for the second rating since it can
- * read perks/benefits straight out of the posting text. Requires an AI
- * provider configured in settings (see server/ai/client.js — works with a
- * free provider like Groq or Gemini, not just Anthropic); callers should
- * treat a thrown error as "skip AI scoring for this job" rather than fatal.
+ * free-text "AI preferences" + your actual career background to Claude and
+ * asks for two qualitative 0-100 ratings — how well you match what the job
+ * requires, and how good the job looks for you (comp, perks, holiday,
+ * culture, growth) — with reasons for each. Lets you express nuance ("avoid
+ * heavily bureaucratic companies", "prefer teams that ship fast", "I need at
+ * least 30 days holiday") that keyword rules can't capture, especially for
+ * the second rating since it can read perks/benefits straight out of the
+ * posting text. Also, independent of any free-text preferences, explicitly
+ * asked to connect the candidate's actual past roles/sectors to this job's
+ * industry — real, evidenced overlaps (e.g. genuine healthtech experience
+ * for a healthtech-adjacent posting) that a plain sectorsInclude keyword
+ * list can only catch if the exact word happens to appear in the posting.
+ * Requires an AI provider configured in settings (see server/ai/client.js —
+ * works with a free provider like Groq or Gemini, not just Anthropic);
+ * callers should treat a thrown error as "skip AI scoring for this job"
+ * rather than fatal.
  */
-async function scoreJobWithAI(job, criteria, settings, feedbackContext) {
+async function scoreJobWithAI(job, criteria, settings, feedbackContext, candidateProfile) {
+  const backgroundText = summarizeCandidateBackground(candidateProfile);
   const prompt = [
     "You are screening a job posting for a candidate, on two SEPARATE dimensions. Respond with ONLY a JSON object, no markdown fences, no commentary:",
     '{"candidateFitScore": <0-100 integer>, "candidateFitReasons": ["short reason", "..."], "roleAppealScore": <0-100 integer>, "roleAppealReasons": ["short reason", "..."]}',
@@ -448,6 +485,14 @@ async function scoreJobWithAI(job, criteria, settings, feedbackContext) {
     ),
     "",
     `Candidate's free-text preferences, in their own words (weight this heavily, it's the whole point of this pass — especially for roleAppealScore): "${criteria.aiPreferences || ""}"`,
+    ...(backgroundText
+      ? [
+          "",
+          "Candidate's actual career background (real companies/roles they've worked in — use this to spot GENUINE sector/domain/industry overlap with this specific job or company, even if the exact word never appears in their criteria's sectorsInclude list or in the posting itself; infer the job's industry from the company/description if it isn't spelled out). " +
+            "When you find a real overlap, say so explicitly and specifically in candidateFitReasons — name the past company/role and what it has in common with this one (e.g. \"Sector experience: you worked in healthtech at Oxford Medical Simulation, and this is also a health-focused company\") — do not invent an overlap that isn't actually there, and don't force one when there genuinely is none:",
+          backgroundText,
+        ]
+      : []),
     ...(feedbackContext
       ? [
           "",

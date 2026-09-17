@@ -127,11 +127,15 @@ async function runDiscoveryCycle() {
     }
 
     // Optional AI-assisted second pass, driven by the profile's free-text
-    // preferences. Bounded in two ways to control cost: only jobs that
+    // preferences AND/OR the candidate's actual career background (see
+    // scoreJobWithAI's header comment in scoring.js — a real sector/domain
+    // overlap with a past role is worth surfacing even with no free-text
+    // preferences set). Bounded in two ways to control cost: only jobs that
     // already cleared a low rule-based bar are considered, and at most
     // `maxAiScoredPerCycle` calls are made, spent on the strongest
     // rule-based candidates first.
-    const useAI = isAIConfigured(data.settings) && Boolean((criteria.aiPreferences || "").trim());
+    const hasBackground = Boolean((data.candidateProfile?.experience || []).length);
+    const useAI = isAIConfigured(data.settings) && (Boolean((criteria.aiPreferences || "").trim()) || hasBackground);
     if (useAI) {
       const eligible = candidates
         .filter((c) => c.ruleScore >= AI_PRESCREEN_THRESHOLD)
@@ -139,7 +143,7 @@ async function runDiscoveryCycle() {
         .slice(0, maxAiPerCycle);
       for (const c of eligible) {
         try {
-          const ai = await scoreJobWithAI(c.job, criteria, data.settings, feedbackContext);
+          const ai = await scoreJobWithAI(c.job, criteria, data.settings, feedbackContext, data.candidateProfile);
           c.finalCandidateFit = Math.round((c.ruleCandidateFit + ai.candidateFitScore) / 2);
           c.finalRoleAppeal = Math.round((c.ruleRoleAppeal + ai.roleAppealScore) / 2);
           c.reasonsByCategory = {

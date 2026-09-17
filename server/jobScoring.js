@@ -38,14 +38,20 @@ async function scoreAgainstCriteria(jobForScoring, data) {
   if (!best) return scoreFields;
 
   let { score, candidateFitScore, roleAppealScore, reasons, reasonsByCategory } = best.result;
+  // Runs whenever there's something for the AI pass to actually use: either
+  // a free-text preference to weigh, or real career history to check for a
+  // genuine sector/domain overlap (see scoreJobWithAI's header comment) —
+  // not only when aiPreferences has been filled in, since the background-
+  // matching value is independent of that.
+  const hasBackground = Boolean((data.candidateProfile?.experience || []).length);
   const useAI =
     isAIConfigured(data.settings) &&
-    Boolean((best.criteria.aiPreferences || "").trim()) &&
+    (Boolean((best.criteria.aiPreferences || "").trim()) || hasBackground) &&
     Boolean(jobForScoring.description && jobForScoring.description.trim());
   if (useAI) {
     try {
       const feedbackContext = buildFeedbackContext(data.jobs);
-      const ai = await scoreJobWithAI(jobForScoring, best.criteria, data.settings, feedbackContext);
+      const ai = await scoreJobWithAI(jobForScoring, best.criteria, data.settings, feedbackContext, data.candidateProfile);
       candidateFitScore = Math.round((candidateFitScore + ai.candidateFitScore) / 2);
       roleAppealScore = Math.round((roleAppealScore + ai.roleAppealScore) / 2);
       reasonsByCategory = {
