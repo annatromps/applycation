@@ -4,7 +4,7 @@ const mammoth = require("mammoth");
 const router = express.Router();
 const db = require("./../db");
 const { runDiscoveryCycle } = require("./../discovery");
-const { buildMaterialsForJob } = require("./../docgen/materials");
+const { buildMaterialsForJob, hasMeaningfulProfile } = require("./../docgen/materials");
 const { scoreJobFully } = require("./../jobScoring");
 const { resolvePostingForJob } = require("./../postingResolver");
 
@@ -122,7 +122,7 @@ router.post("/", async (req, res) => {
   // Same auto-generation behaviour as discovery: build materials right away
   // if you've left that setting on and have a candidate profile saved, so
   // this job is just as "ready" as one the automated search would surface.
-  if (data.settings.autoGenerateMaterials !== false && data.candidateProfile) {
+  if (data.settings.autoGenerateMaterials !== false && hasMeaningfulProfile(data.candidateProfile)) {
     try {
       record.materials = await buildMaterialsForJob(data.candidateProfile, record, data.settings);
     } catch (e) {

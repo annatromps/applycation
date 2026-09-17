@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const db = require("./db");
 const { discoverJobs } = require("./sources");
 const { scoreJob, scoreJobWithAI, buildFeedbackContext, scoreSubmissionEaseFull } = require("./scoring");
-const { buildMaterialsForJob } = require("./docgen/materials");
+const { buildMaterialsForJob, hasMeaningfulProfile } = require("./docgen/materials");
 const { sendNotification } = require("./notify");
 const { isAIConfigured } = require("./ai/client");
 const { discoverFromEmailDigests } = require("./email/digestImport");
@@ -91,7 +91,7 @@ async function runDiscoveryCycle() {
   // like the AI scoring pass above. Skipped entirely with no candidate
   // profile set yet; anything skipped by the cap can still be generated
   // manually from the job's detail view.
-  const autoGenerateMaterials = data.settings.autoGenerateMaterials !== false && Boolean(data.candidateProfile);
+  const autoGenerateMaterials = data.settings.autoGenerateMaterials !== false && hasMeaningfulProfile(data.candidateProfile);
   const maxMaterialsPerCycle = data.settings.maxMaterialsGeneratedPerCycle ?? 20;
   let materialsGeneratedThisCycle = 0;
   let materialsSkippedForCap = 0;
