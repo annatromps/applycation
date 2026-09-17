@@ -479,7 +479,22 @@ async function renderDashboard() {
     try {
       const result = await api("/jobs/discover", { method: "POST" });
       clearInterval(rotateLoadingMessage);
-      if (result.added > 0) {
+      if (result.added > 0 && result.diagnostics?.materialsSkippedNoProfile > 0) {
+        // Matches were found, but materials generation never even ran for
+        // any of them — there's no name/experience on file yet for it to
+        // work from. A bare "N new matches" alert would look identical to
+        // a normal successful run, so this needs its own callout with a
+        // direct link to where it's actually fixed.
+        openModal(discoveryMaterialsSkippedHtml(result.added));
+        document.getElementById("close-modal").addEventListener("click", closeModal);
+        const gotoCv = document.getElementById("goto-cv-upload");
+        if (gotoCv) {
+          gotoCv.addEventListener("click", (e) => {
+            e.preventDefault();
+            navigateAndFocusField("#/me", "upload-cv");
+          });
+        }
+      } else if (result.added > 0) {
         alert(`Discovery complete: ${result.added} new match(es) found.`);
       } else {
         // A bare "0 new matches" alert can't tell you whether it actually
@@ -517,6 +532,20 @@ async function renderDashboard() {
     }
   });
   attachRowHandlers();
+}
+
+// Matches WERE found this cycle, but materials generation didn't even run
+// for any of them — there's no name/experience saved in the candidate
+// profile yet for the generator to work from (see hasMeaningfulProfile in
+// server/docgen/materials.js). Without this, "N new matches" reads exactly
+// like a normal successful run with nothing to suggest anything's missing.
+function discoveryMaterialsSkippedHtml(added) {
+  return `
+    <span class="close-x" id="close-modal">&times;</span>
+    <h3>Discovery complete: ${added} new match${added === 1 ? "" : "es"}</h3>
+    <p><strong>No CV/cover letter was prepared for any of them</strong> — your candidate profile doesn't have a name or any experience saved yet, so there's nothing for the generator to build from.</p>
+    <p><a href="#" id="goto-cv-upload">Upload your CV on the Me tab</a> (or fill the profile in by hand), then either regenerate these from each job's detail view or wait for the next discovery cycle.</p>
+  `;
 }
 
 // Explains a 0-new-matches discovery cycle instead of leaving it looking
@@ -909,10 +938,29 @@ async function renderReview() {
           }
           renderReview();
         } catch (err) {
-          showMessageModal("Couldn't prepare materials", `
-            <p>${esc(err.message)}</p>
-            <p class="hint">This usually means your <a href="#/me">candidate profile</a> is missing something the generator needs (e.g. no experience entries yet), or the AI provider configured under <a href="#/settings">Settings</a> is unreachable. Fix that and try "Approve" again.</p>
-          `);
+          // buildMaterialsForJob (server/docgen/materials.js) throws this
+          // exact, specific message when there's no name/experience saved
+          // yet to generate from — worth its own direct link straight to
+          // the CV upload spot rather than the generic fallback below,
+          // since "your profile needs something" is vague about WHERE.
+          const noProfileYet = /candidate profile is still empty/i.test(err.message || "");
+          showMessageModal("Couldn't prepare materials", noProfileYet
+            ? `
+              <p>${esc(err.message)}</p>
+              <p><a href="#" id="goto-cv-upload-approve">Upload your CV on the Me tab</a> (or fill the profile in by hand), then try "Approve" again.</p>
+            `
+            : `
+              <p>${esc(err.message)}</p>
+              <p class="hint">This usually means your <a href="#/me">candidate profile</a> is missing something the generator needs (e.g. no experience entries yet), or the AI provider configured under <a href="#/settings">Settings</a> is unreachable. Fix that and try "Approve" again.</p>
+            `
+          );
+          const gotoCv = document.getElementById("goto-cv-upload-approve");
+          if (gotoCv) {
+            gotoCv.addEventListener("click", (e) => {
+              e.preventDefault();
+              navigateAndFocusField("#/me", "upload-cv");
+            });
+          }
           btn.disabled = false;
           btn.textContent = alreadyHasMaterials ? "Approve" : "Approve & prepare materials";
         }

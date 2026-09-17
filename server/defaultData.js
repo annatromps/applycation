@@ -28,7 +28,13 @@ function defaultData() {
       // plan's quota, so it doesn't guess one). See server/ai/client.js's
       // checkAndRecordAIUsage for the enforcement + reset logic.
       aiDailyUsageLimit: null,
-      autoGenerateMaterials: true, // build & save a tailored CV + cover letter for every surfaced match automatically
+      // Defaults to false: only prepare a tailored CV + cover letter once
+      // you actually hit "Approve" on a job (see public/app.js's Review
+      // Queue "Approve & prepare materials" flow), not automatically for
+      // every surfaced match. Was true by default until Anna asked
+      // twice for approve-first behavior — flip it on here if you'd
+      // rather have materials waiting the moment a match is discovered.
+      autoGenerateMaterials: false,
       maxMaterialsGeneratedPerCycle: 20, // cost guard: cap auto-generated materials per discovery run (AI cover-letter drafting costs an API call each)
       coverLetterInstructions: "", // free-text prompt fed to the AI-assisted cover letter drafter (server/docgen/coverLetter.js) — tone/emphasis preferences, e.g. "keep it under 200 words" or "lead with enthusiasm for the mission, not just the skills match". Only used when an AI provider is configured; template mode ignores it.
       timezone: "Europe/Madrid",

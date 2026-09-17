@@ -38,6 +38,12 @@ async function runDiscoveryCycle() {
     hardFailed: 0, // ruled out by a criteria dealbreaker
     belowThreshold: 0, // scored but under minScoreToSurface
     added: 0,
+    // Set below, once it's known whether this cycle even attempted
+    // materials generation at all (see hasMeaningfulProfile in
+    // docgen/materials.js) — surfaced so "N new matches" doesn't quietly
+    // mean "N new matches, all with blank documents" with no visibility
+    // anywhere in the UI. See routes/jobs.js's /discover response.
+    materialsSkippedNoProfile: 0,
   };
   // Built once per cycle (not per job) — your accumulated 👍/👎 feedback,
   // fed into the AI scoring pass below so matching actually improves over
@@ -221,6 +227,19 @@ async function runDiscoveryCycle() {
   if (materialsSkippedForCap) {
     console.log(
       `[discovery] Skipped auto-generating materials for ${materialsSkippedForCap} match(es) — hit the ${maxMaterialsPerCycle}/cycle cap. Generate manually from each job's detail view, or raise "Max materials generated per cycle" in Settings.`
+    );
+  }
+  // Auto-generation is turned on but there's no name/experience to actually
+  // generate FROM — the `autoGenerateMaterials` gate above already skipped
+  // attempting it for every job this cycle rather than generating blank
+  // documents (see hasMeaningfulProfile in docgen/materials.js). Report that
+  // once for the whole cycle so the frontend can show a real callout,
+  // instead of a silent "N new matches" that gives no hint materials were
+  // never even attempted.
+  if (data.settings.autoGenerateMaterials !== false && !hasMeaningfulProfile(data.candidateProfile) && diagnostics.added) {
+    diagnostics.materialsSkippedNoProfile = diagnostics.added;
+    console.log(
+      `[discovery] Skipped auto-generating materials for all ${diagnostics.added} new match(es) — no name/experience saved yet in the candidate profile (Me tab).`
     );
   }
 
