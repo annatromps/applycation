@@ -758,9 +758,15 @@ function sourceLabel(j) {
   if (j.source !== "email-digest") return j.source;
   let site = j.originSite;
   if (!site && j.url) {
-    try { site = new URL(j.url).hostname.replace(/^www\./, "").split(".").slice(-2).join("."); } catch {}
+    // Only trust the link's host for known job-alert sites. A link that was
+    // resolved to the employer's own ATS (greenhouse.io etc.) says nothing
+    // about which site's email it came from.
+    try {
+      const host = new URL(j.url).hostname.replace(/^www\./, "").split(".").slice(-2).join(".");
+      if (["linkedin.com", "indeed.com", "welcometothejungle.com", "wellfound.com", "glassdoor.com"].includes(host)) site = host;
+    } catch {}
   }
-  return site ? `email · ${site}` : "email · unknown site";
+  return site ? `email · ${site}` : "email · earlier import (site not recorded)";
 }
 
 async function renderReview() {
