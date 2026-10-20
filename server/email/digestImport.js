@@ -15,6 +15,14 @@ const { resolveApplyLink } = require("./resolveApplyLink");
 
 const SOURCE = "email-digest";
 
+// "jobalerts-noreply@linkedin.com" -> "linkedin.com". Recorded on each job so
+// the Review Queue can tell LinkedIn alerts apart from Indeed/etc. digests,
+// which otherwise all share the single "email-digest" source.
+function senderSite(from) {
+  const host = String(from || "").split("@")[1] || "";
+  return host.toLowerCase().split(".").slice(-2).join(".");
+}
+
 /**
  * @param {object} settings
  * @param {string[]} processedIds - previously-imported Message-IDs, passed
@@ -70,6 +78,7 @@ async function discoverFromEmailDigests(settings, processedIds = []) {
         postedAt: email.date,
         tags: [],
         resolvedVia: resolved.resolvedVia,
+        originSite: senderSite(email.from),
       });
     }
   }

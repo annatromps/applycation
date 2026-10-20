@@ -99,6 +99,7 @@ async function fetchNewLinkedInDigests(settings, processedIds = []) {
           const parsed = await simpleParser(msg.source);
           results.push({
             subject: parsed.subject || "",
+            from: (parsed.from && parsed.from.value && parsed.from.value[0] && parsed.from.value[0].address) || "",
             date: parsed.date ? parsed.date.toISOString() : null,
             html: parsed.html || "",
             text: parsed.text || "",

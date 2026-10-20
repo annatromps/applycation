@@ -730,7 +730,7 @@ function reviewJobRowHtml(j) {
       ${companyLogoHtml(j.company, 44)}
       <div class="job-row-main">
         <h4>${esc(j.company)} <span class="score ${scoreClass(j.score)}">Score ${j.score}/100</span></h4>
-        <div class="meta">${esc(j.title)} · ${esc(j.location || "—")} · via ${esc(j.source)} · discovered ${fmtDate(j.discoveredAt)}
+        <div class="meta">${esc(j.title)} · ${esc(j.location || "—")} · via ${esc(sourceLabel(j))} · discovered ${fmtDate(j.discoveredAt)}
           ${j.url ? `&nbsp;<a class="posting-link-btn" href="${esc(j.url)}" target="_blank" rel="noopener">View posting ↗</a>` : ""}
         </div>
         ${ratingsDetailHtml(j)}
@@ -750,6 +750,18 @@ const REVIEW_SORTS = {
   "date-desc": (a, b) => new Date(b.discoveredAt) - new Date(a.discoveredAt),
   "date-asc": (a, b) => new Date(a.discoveredAt) - new Date(b.discoveredAt),
 };
+
+// Email-imported jobs all share source "email-digest", so the Review Queue
+// filter/label uses the site the alert email came from (e.g. "email · linkedin.com").
+// Jobs imported before originSite was recorded fall back to the link's host.
+function sourceLabel(j) {
+  if (j.source !== "email-digest") return j.source;
+  let site = j.originSite;
+  if (!site && j.url) {
+    try { site = new URL(j.url).hostname.replace(/^www\./, "").split(".").slice(-2).join("."); } catch {}
+  }
+  return site ? `email · ${site}` : "email · unknown site";
+}
 
 async function renderReview() {
   main.innerHTML = `<h2>Review Queue</h2>${reviewSubTabsHtml("review")}<div id="review-body">Loading…</div>`;
@@ -775,7 +787,7 @@ async function renderReview() {
   }
 
   const jobsById = Object.fromEntries(jobs.map((j) => [j.id, j]));
-  const sources = [...new Set(jobs.map((j) => j.source).filter(Boolean))].sort();
+  const sources = [...new Set(jobs.map(sourceLabel).filter(Boolean))].sort();
 
   // A handful of matches isn't necessarily wrong, but it's worth a nudge
   // rather than leaving it looking like this is just all there is — see the
@@ -910,7 +922,7 @@ async function renderReview() {
     const minScore = Number(document.getElementById("review-min-score").value) || 0;
     const source = document.getElementById("review-source-filter").value;
     const list = jobs
-      .filter((j) => (j.score ?? 0) >= minScore && (!source || j.source === source))
+      .filter((j) => (j.score ?? 0) >= minScore && (!source || sourceLabel(j) === source))
       .sort(REVIEW_SORTS[sortKey] || REVIEW_SORTS["score-desc"]);
 
     if (!list.length) {
@@ -1273,7 +1285,7 @@ async function openJobDetail(id) {
         <div class="meta job-detail-quickfacts">
           <span class="badge ${job.status}">${job.status.replace(/_/g, " ")}</span>
           ${job.score != null ? `<span class="score ${scoreClass(job.score)}">Overall score ${job.score}/100</span>` : ""}
-          ${job.source ? `<span class="hint">via ${esc(job.source)}${job.discoveredAt ? ` · discovered ${fmtDate(job.discoveredAt)}` : ""}</span>` : ""}
+          ${job.source ? `<span class="hint">via ${esc(sourceLabel(job))}${job.discoveredAt ? ` · discovered ${fmtDate(job.discoveredAt)}` : ""}</span>` : ""}
         </div>
       </div>
     </div>
