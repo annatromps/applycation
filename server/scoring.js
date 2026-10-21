@@ -111,7 +111,7 @@ function scoreJob(job, criteria) {
         reasonsByCategory: { candidateFit: [], roleAppeal: [reason] },
       };
     }
-    if (!job.remote && !wantsInPerson) {
+    if (!job.remote && !wantsInPerson && !job.arrangementUnknown) {
       const reason = "This role isn't remote, and you've said you only want remote work";
       return {
         score: 0,
@@ -219,7 +219,7 @@ function scoreJob(job, criteria) {
     if (remoteLocHit.length) {
       bump(ra, 5, `Remote location match: ${remoteLocHit.join(", ")}`);
     }
-  } else if ((criteria.locations || []).length) {
+  } else if ((criteria.locations || []).length && !job.arrangementUnknown) {
     const locHit = criteria.locations.find((l) => textIncludes(job.location, l));
     if (locHit) {
       bump(ra, 15, `Location match: "${locHit}"`);

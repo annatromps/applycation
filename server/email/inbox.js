@@ -35,12 +35,26 @@ function parseSenderList(senderFilter) {
     .filter(Boolean);
 }
 
+// imapflow's own message for a rejected login is just "Command failed",
+// which says nothing. The useful detail is on the error object — turn it into
+// something that tells you what to actually fix.
+function describeImapError(e) {
+  if (e && e.authenticationFailed) {
+    const detail = e.responseText ? ` (Gmail said: ${e.responseText})` : "";
+    return `Gmail rejected the login${detail}. Use a 16-character App password from myaccount.google.com/apppasswords (needs 2-Step Verification on) — not your normal Google password — and check the email address is the full Gmail address.`;
+  }
+  if (e && (e.code === "ENOTFOUND" || e.code === "ETIMEDOUT" || e.code === "ECONNREFUSED")) {
+    return `Couldn't reach the mail server (${e.code}) — check the IMAP host.`;
+  }
+  return (e && (e.responseText || e.message)) || "Unknown email error";
+}
+
 function buildImapClient(cfg) {
   return new ImapFlow({
     host: cfg.host || "imap.gmail.com",
     port: cfg.port || 993,
     secure: cfg.secure !== false,
-    auth: { user: cfg.user, pass: cfg.appPassword },
+    auth: { user: String(cfg.user || "").trim(), pass: String(cfg.appPassword || "").replace(/\s+/g, "") },
     logger: false,
     // Without these, a bad host/network issue can hang the connection
     // indefinitely instead of failing — bad for a background discovery run,
@@ -78,7 +92,11 @@ async function fetchNewLinkedInDigests(settings, processedIds = []) {
   const client = buildImapClient(cfg);
   const results = [];
   const newlyProcessed = [];
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (e) {
+    throw new Error(describeImapError(e));
+  }
   try {
     const lock = await client.getMailboxLock(cfg.folder || "INBOX");
     try {
@@ -139,7 +157,7 @@ async function testConnection(settings) {
     lock.release();
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: describeImapError(e) };
   } finally {
     await client.logout().catch(() => {});
   }
@@ -248,7 +266,7 @@ async function suggestSenderDomains(settings) {
       lock.release();
     }
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: describeImapError(e) };
   } finally {
     await client.logout().catch(() => {});
   }

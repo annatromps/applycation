@@ -72,6 +72,11 @@ async function discoverFromEmailDigests(settings, processedIds = []) {
         company: entry.company || "(unknown — see link)",
         location: "",
         remote: false,
+        // Alert emails rarely say whether a role is remote or where it is, so
+        // `remote: false` above means "not stated", not "on-site". scoring.js
+        // skips the hard work-arrangement filter for these — otherwise a
+        // remote-only profile rejected every email-imported job.
+        arrangementUnknown: true,
         url: resolved.url,
         salary: null,
         description: resolved.description,
