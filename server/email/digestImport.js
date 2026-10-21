@@ -41,6 +41,7 @@ async function discoverFromEmailDigests(settings, processedIds = []) {
   const { results: emails, processedIds: updatedProcessedIds } = await fetchNewLinkedInDigests(settings, processedIds);
   if (!emails.length) return { jobs: [], emailsChecked: 0, processedIds: updatedProcessedIds };
 
+  const emailSettings = (settings && settings.emailInbox) || {};
   const jobs = [];
   const seenKeys = new Set();
   for (const email of emails) {
@@ -71,12 +72,14 @@ async function discoverFromEmailDigests(settings, processedIds = []) {
         title: entry.title || "(title not found in digest — open the link to view)",
         company: entry.company || "(unknown — see link)",
         location: "",
-        remote: false,
-        // Alert emails rarely say whether a role is remote or where it is, so
-        // `remote: false` above means "not stated", not "on-site". scoring.js
-        // skips the hard work-arrangement filter for these — otherwise a
-        // remote-only profile rejected every email-imported job.
-        arrangementUnknown: true,
+        // Alert emails rarely say whether a role is remote. If the user has
+        // confirmed their alerts are filtered to Remote on the job site's own
+        // side (Settings), trust that; otherwise `remote: false` means "not
+        // stated", not "on-site", and scoring.js skips the hard work-arrangement
+        // filter for these — otherwise a remote-only profile rejected every
+        // email-imported job.
+        remote: Boolean(emailSettings.alertsRemoteOnly),
+        arrangementUnknown: !emailSettings.alertsRemoteOnly,
         url: resolved.url,
         salary: null,
         description: resolved.description,

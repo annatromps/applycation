@@ -167,7 +167,15 @@ async function runDiscoveryCycle() {
       const candidateFitScore = c.finalCandidateFit ?? c.ruleCandidateFit;
       const roleAppealScore = c.finalRoleAppeal ?? c.ruleRoleAppeal;
       const finalScore = Math.round((candidateFitScore + roleAppealScore) / 2);
-      if (finalScore < (data.settings.minScoreToSurface ?? 55)) {
+      // Jobs from job-alert emails get a lower bar: the site already filtered
+      // them to your alert (that's the signal), and an email carries no
+      // location/salary/description for the scorer to credit, so they can
+      // never reach the bar a full job-board listing can. They still need a
+      // real title match (~40+), so an unrelated role in the same email is
+      // dropped, and they're hard-failed above for genuine dealbreakers.
+      const minScore = data.settings.minScoreToSurface ?? 55;
+      const bar = c.job.source === "email-digest" ? Math.min(minScore, 40) : minScore;
+      if (finalScore < bar) {
         diagnostics.belowThreshold++;
         continue;
       }

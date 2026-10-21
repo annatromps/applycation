@@ -1634,6 +1634,11 @@ async function renderSettings() {
         <input type="checkbox" id="emailInboxEnabled" ${emailInbox.enabled ? "checked" : ""} style="width:auto;" />
         Import job-alert emails from a connected inbox
       </label>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-top:6px;">
+        <input type="checkbox" id="emailAlertsRemoteOnly" ${emailInbox.alertsRemoteOnly ? "checked" : ""} style="width:auto;" />
+        My job alerts are already set to Remote only
+      </label>
+      <p class="hint" style="margin:2px 0 6px;">Alert emails rarely say whether a role is remote, so tick this only after setting each LinkedIn alert's <strong>On-site/remote → Remote</strong> filter. Then every job from these emails is treated as remote. Leave it unticked and email jobs are kept but not checked against your work-arrangement requirement.</p>
       <div id="email-inbox-health" style="margin:8px 0 4px;">${emailHealthHtml(settings.emailInboxHealth)}</div>
       <div class="form-row">
         <div>
@@ -1656,7 +1661,7 @@ async function renderSettings() {
         </div>
       </div>
       <p class="hint">Add every job site you get alert/digest emails from here, comma-separated — e.g. "linkedin.com, indeed.com, welcometothejungle.com, wellfound.com". A whole domain like "linkedin.com" is a catch-all for every kind of alert email that site sends; anything fetched that turns out not to actually contain a job listing is skipped for free, so it's safe to leave broad rather than guessing exact sender addresses. Not sure what else to add? <button type="button" id="scan-inbox-senders" class="link-btn">🔍 Scan my inbox for job sites</button> — looks through your recent mail for likely candidates and lets you confirm or dismiss each one before anything's added.</p>
-      <div style="margin-top:10px;"><button type="button" id="test-email-inbox" class="secondary">Test connection</button></div>
+      <div style="margin-top:10px;"><button type="button" id="test-email-inbox" class="secondary">Test connection</button> <button type="button" id="reimport-email-inbox" class="secondary" title="Re-read the last few days of alert emails on the next run">Re-import recent emails</button><span id="reimport-msg" class="hint"></span></div>
 
       <div style="margin-top:16px;"><button id="save-settings-advanced">Save settings</button><span id="settings-msg-advanced" class="hint"></span></div>
     </details>
@@ -1706,6 +1711,7 @@ async function renderSettings() {
       coverLetterInstructions: document.getElementById("coverLetterInstructions").value,
       emailInbox: {
         enabled: document.getElementById("emailInboxEnabled").checked,
+        alertsRemoteOnly: document.getElementById("emailAlertsRemoteOnly").checked,
         user: document.getElementById("emailInboxUser").value.trim(),
         appPassword: document.getElementById("emailInboxAppPassword").value,
         host: document.getElementById("emailInboxHost").value.trim() || "imap.gmail.com",
@@ -1728,6 +1734,10 @@ async function renderSettings() {
   // saved values, so you can verify credentials before hitting Save. If the
   // app-password field still shows the masked placeholder (untouched since
   // last save), the server tests with the real saved password instead.
+  document.getElementById("reimport-email-inbox").addEventListener("click", async () => {
+    await api("/settings/email-inbox/reimport", { method: "POST" });
+    document.getElementById("reimport-msg").textContent = " Done — the next run will re-read recent alert emails.";
+  });
   document.getElementById("test-email-inbox").addEventListener("click", async () => {
     const btn = document.getElementById("test-email-inbox");
     const target = document.getElementById("email-inbox-health");

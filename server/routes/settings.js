@@ -100,6 +100,17 @@ router.post("/ai/test", async (req, res) => {
   res.json(result);
 });
 
+// Forgets which alert emails have already been imported, so the next
+// discovery cycle re-reads the recent ones (jobs already in the queue are
+// still de-duplicated, so this can't create duplicates). Useful after fixing
+// something that made earlier imports get thrown away.
+router.post("/email-inbox/reimport", async (req, res) => {
+  const data = await db.read();
+  data.meta.emailDigestProcessedIds = [];
+  await db.write(data);
+  res.json({ ok: true });
+});
+
 router.put("/", async (req, res) => {
   const data = await db.read();
   const incoming = req.body || {};
